@@ -1,4 +1,4 @@
-# batch-01 — Kernel 任务分解
+# batch-01 — MVP 任务分解
 
 > **执行顺序**：从上到下依次执行。每个 Task 完成后通过验证检查点再进入下一个。
 >
@@ -25,9 +25,9 @@ touch harness/__init__.py
 touch harness/core/__init__.py
 touch harness/core/exceptions.py
 touch harness/core/container.py
-touch harness/core/config.py
+touch harness/config/loader.py
 touch harness/core/orchestrator.py
-touch harness/core/llm_adapter.py
+touch harness/adapters/llm_adapter.py
 touch harness/di.py
 mkdir -p tests
 touch tests/__init__.py
@@ -354,7 +354,7 @@ with pytest.raises(ComponentNotRegisteredError):
 
 ## Task 4：ConfigLoader 实现
 
-**目标**：实现 `harness/core/config.py` — TOML 配置文件加载、解析与校验。
+**目标**：实现 `harness/config/loader.py` — TOML 配置文件加载、解析与校验。
 
 **依赖**：Task 2
 
@@ -364,7 +364,7 @@ with pytest.raises(ComponentNotRegisteredError):
 
 ### 步骤 4.1：实现 ProfileConfig 数据类 `[V]`
 
-**操作**：在 `harness/core/config.py` 中定义 `ProfileConfig` dataclass。
+**操作**：在 `harness/config/loader.py` 中定义 `ProfileConfig` dataclass。
 
 ```python
 from dataclasses import dataclass, field
@@ -387,7 +387,7 @@ class ProfileConfig:
 **验证方法**：
 
 ```python
-from harness.core.config import ProfileConfig
+from harness.config.loader import ProfileConfig
 
 # 1. 创建实例
 config = ProfileConfig(
@@ -433,7 +433,7 @@ except ModuleNotFoundError:
 
 ```python
 import tempfile, os
-from harness.core.config import ConfigLoader, ProfileConfig
+from harness.config.loader import ConfigLoader, ProfileConfig
 
 loader = ConfigLoader()
 
@@ -505,7 +505,7 @@ finally:
 **验证方法**：
 
 ```python
-from harness.core.config import ConfigLoader, ProfileConfig
+from harness.config.loader import ConfigLoader, ProfileConfig
 from harness.core.exceptions import ConfigValidationError
 
 loader = ConfigLoader()
@@ -564,7 +564,7 @@ loader.validate(ProfileConfig(
 
 ```python
 import tempfile, os
-from harness.core.config import ConfigLoader
+from harness.config.loader import ConfigLoader
 
 loader = ConfigLoader()
 
@@ -632,7 +632,7 @@ finally:
 
 ### 步骤 5.1：定义编排器所需的最小数据结构 `[V]`
 
-**操作**：在 `harness/core/orchestrator.py` 顶部定义编排器内部使用的轻量数据结构。
+**操作**：在 `harness/core/types.py` 中定义编排器内部使用的轻量数据结构。
 
 由于 batch-02 才定义正式的大包对象，batch-01 编排器使用**最小化的内部数据结构**来表示各阶段的数据流。这些是临时结构，batch-02 实现后会被正式类型替换。
 
@@ -1038,7 +1038,7 @@ _phase_loop(initial_ctx):
 将 LLM 响应中的 text 和 tool_uses 转为 OpenAI 兼容的 assistant message dict：
 
 ```python
-def _build_assistant_message(self, response: _MinimalResponse) -> Dict:
+def build_assistant_message(, response: _MinimalResponse) -> Dict:
     """将 Response 转换为含 tool_calls 的 assistant message dict。
 
     OpenAI 格式:
@@ -1512,7 +1512,7 @@ assert orch._should_exit(
 
 ## Task 6：MinimalLLMAdapter 实现
 
-**目标**：实现 `harness/core/llm_adapter.py` — 零外部依赖的 OpenAI 兼容 LLM 适配器。实现后 batch-01 就能 ping 通真实 LLM API。
+**目标**：实现 `harness/adapters/llm_adapter.py` — 零外部依赖的 OpenAI 兼容 LLM 适配器。实现后 batch-01 就能 ping 通真实 LLM API。
 
 **依赖**：Task 5.1（_MinimalResponse, _MinimalToolCall 数据结构）
 
@@ -1560,7 +1560,7 @@ class MinimalLLMAdapter:
 
 ```python
 import os
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 1. 显式传入 api_key
 adapter = MinimalLLMAdapter(api_key="sk-test123")
@@ -1671,7 +1671,7 @@ def _send_request(self, body: Dict) -> Dict:
 **验证方法**：
 
 ```python
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 adapter = MinimalLLMAdapter(api_key="test-key", model="test-model")
 
@@ -1773,7 +1773,7 @@ def __call__(
 **验证方法**：
 
 ```python
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 from harness.core.orchestrator import _MinimalResponse, _MinimalToolCall
 
 adapter = MinimalLLMAdapter(api_key="test")
@@ -1874,7 +1874,7 @@ assert result4.stop_reason == "end_turn"
     python test_llm_live.py
 """
 
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 测试 1：连接到 OpenAI
 adapter = MinimalLLMAdapter(model="gpt-4o-mini")
@@ -2355,9 +2355,9 @@ find harness -type f | sort
 # harness/core/__init__.py
 # harness/core/exceptions.py
 # harness/core/container.py
-# harness/core/config.py
+# harness/config/loader.py
 # harness/core/orchestrator.py
-# harness/core/llm_adapter.py
+# harness/adapters/llm_adapter.py
 
 find tests -type f | sort
 # 预期：

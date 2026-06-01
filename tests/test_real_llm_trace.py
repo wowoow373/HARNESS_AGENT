@@ -8,7 +8,7 @@
   4. LifecycleOrchestrator 完整三阶段 trace (init → loop → end)
   5. Sensor 接收完整 Trajectory 验证
 
-API 配置从 harness/core/.env 读取。
+API 配置从 harness/config/.env 读取。
 """
 
 import os
@@ -29,7 +29,7 @@ def load_env(path: str) -> dict:
             config[key.strip()] = value.strip()
     return config
 
-env_path = os.path.join(os.path.dirname(__file__), "..", "harness", "core", ".env")
+env_path = os.path.join(os.path.dirname(__file__), "..", "harness", "config", ".env")
 env = load_env(env_path)
 
 API_KEY = env["api-key"]

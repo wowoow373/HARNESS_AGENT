@@ -1,9 +1,10 @@
 """Harness Agent Template — 内核模块。
 
-包含 DI 容器、配置加载器、生命周期编排器、LLM 适配器和异常体系。
+包含 DI 容器、生命周期编排器和异常体系。
 """
 
-from .config import ConfigLoader, ProfileConfig
+from ..adapters import MinimalLLMAdapter  # re-export for backward compatibility
+from ..config import ConfigLoader, ProfileConfig  # re-export for backward compatibility
 from .container import DIContainer
 from .exceptions import (
     ComponentNotRegisteredError,
@@ -16,7 +17,6 @@ from .exceptions import (
     HarnessError,
     OrchestratorError,
 )
-from .llm_adapter import MinimalLLMAdapter
 from .orchestrator import LifecycleOrchestrator
 
 __all__ = [

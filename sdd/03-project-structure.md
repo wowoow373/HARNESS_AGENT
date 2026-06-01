@@ -9,12 +9,15 @@
 ```
 harness_agent/
 ├── sdd/                          # SDD 规格文件（当前目录）
-├── harness/                      # 框架内核源码
-│   ├── core/                     # DI 容器、事件总线、生命周期编排
-│   ├── interfaces/               # 所有组件的抽象接口（协议/抽象类）
-│   ├── components/               # 各组件实现
-│   ├── hooks/                    # Hook 系统
-│   └── di.py                     # DI 容器实现与装配入口
+├── harness/                      # 框架源码
+│   ├── core/                     # 内核：DI 容器、生命周期编排、异常、数据类型
+│   ├── interfaces/               # 组件接口类型（占位，后续替换为 Protocol/ABC）
+│   ├── adapters/                 # 外部系统适配器（LLM API 等）
+│   ├── config/                   # 配置模块（TOML 加载、.env 模板）
+│   ├── messaging/                # 消息构造工具
+│   ├── components/               # 各组件实现（后续批次）
+│   ├── hooks/                    # Hook 系统（后续批次）
+│   └── di.py                     # 装配入口
 ├── profiles/                     # 领域模板
 │   ├── coding-assistant/
 │   ├── travel-assistant/
@@ -36,7 +39,7 @@ harness_agent/
 - DI 容器实现
 - 事件总线实现
 - 生命周期编排器（按固定顺序调用组件的方法）
-- 配置加载器（TOML 解析）
+- 内部数据类型定义
 
 **不放什么：**
 - 任何组件接口定义（放 `interfaces/`）

@@ -21,7 +21,7 @@ import pytest
 
 
 def _read_dotenv():
-    """Read config from harness/core/.env file."""
+    """Read config from harness/config/.env file."""
     env_path = Path(__file__).parent.parent / "harness" / "core" / ".env"
     config = {}
     if env_path.exists():
@@ -601,7 +601,7 @@ class TestMinimalLLMAdapterConstruction:
     def test_none_api_key_auto_resolves(self):
         """api_key=None triggers auto-resolution from env/.env (§7.1)."""
         from harness.core.llm_adapter import MinimalLLMAdapter
-        # This should read from harness/core/.env automatically
+        # This should read from harness/config/.env automatically
         adapter = MinimalLLMAdapter(
             base_url="https://api.deepseek.com",
             api_key=None,
@@ -611,13 +611,13 @@ class TestMinimalLLMAdapterConstruction:
         assert callable(adapter)
 
     def test_dotenv_file_exists(self):
-        """Verify harness/core/.env exists."""
-        env_path = Path(__file__).parent.parent / "harness" / "core" / ".env"
+        """Verify harness/config/.env exists."""
+        env_path = Path(__file__).parent.parent / "harness" / "config" / ".env"
         assert env_path.exists()
 
     def test_dotenv_has_expected_keys(self):
         """.env file contains api-key, base_url, model."""
-        env_path = Path(__file__).parent.parent / "harness" / "core" / ".env"
+        env_path = Path(__file__).parent.parent / "harness" / "config" / ".env"
         content = env_path.read_text()
         assert "api-key" in content or "api_key" in content
         assert "base_url" in content

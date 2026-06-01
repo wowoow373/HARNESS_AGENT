@@ -1,10 +1,10 @@
-# batch-01 — Kernel 设计文档
+# batch-01 — MVP 设计文档
 
-> **目标**：构建框架微内核 — DI 容器、生命周期编排器、配置加载器。这是所有后续批次的基石。
+> **目标**：构建框架 MVP（最小可行产品）— DI 容器、生命周期编排器、配置加载器、LLM 适配器。这是所有后续批次的基石。MVP 即可独立运行，不需要等到所有批次完成。
 >
 > **依赖**：无（第一批次）
 >
-> **产出**：`harness/core/*`、`harness/di.py`
+> **产出**：`harness/core/*`、`harness/interfaces/*`、`harness/adapters/*`、`harness/config/*`、`harness/messaging/*`、`harness/di.py`
 
 ---
 
@@ -16,17 +16,20 @@
 |------|------|---------|
 | **DIContainer** | 预构造实例注册与按接口类型解析 | `harness/core/container.py` |
 | **LifecycleOrchestrator** | 按三阶段（初始化→循环→结束）编排组件调用 | `harness/core/orchestrator.py` |
-| **ConfigLoader** | 读取 TOML 配置文件，返回结构化配置字典 | `harness/core/config.py` |
 | **异常体系** | 框架所有异常的基类和核心异常类 | `harness/core/exceptions.py` |
+| **内部数据类型** | 编排器内部使用的数据结构定义 | `harness/core/types.py` |
+| **组件接口类型** | 占位接口类型，作为 DI 容器的注册 key | `harness/interfaces/__init__.py` |
+| **MinimalLLMAdapter** | 零依赖 OpenAI 兼容 LLM 适配器 | `harness/adapters/llm_adapter.py` |
+| **ConfigLoader** | 读取 TOML 配置文件，返回结构化配置对象 | `harness/config/loader.py` |
+| **消息构造工具** | OpenAI 兼容格式的消息构造函数 | `harness/messaging/builder.py` |
 | **装配入口** | `Harness.from_container()` 工厂方法 + `harness/di.py` | `harness/di.py` |
 
 ### 1.2 不做什么
 
-- ❌ 任何组件接口定义（那是 batch-02）
 - ❌ 任何组件具体实现（那是 batch-03 ~ 08）
 - ❌ Hook 系统（那是 batch-09）
 - ❌ CLI 入口 / `main.py`（那是 batch-10）
-- ❌ LLM 调用逻辑（框架只负责编排，LLM 调用是外部依赖）
+- ❌ 正式的 Protocol/ABC 接口定义（后续版本）
 
 ---
 
@@ -565,14 +568,14 @@ class OrchestratorError(HarnessError):
 
 ### 6.1 职责与定位
 
-**定位**：kernel 自带的最小化 LLM 调用适配器。实现后 batch-01 就能 ping 通真实的 LLM API，不需要等到 batch-10。
+**定位**：MVP 自带的最小化 LLM 调用适配器。实现后 batch-01 就能 ping 通真实的 LLM API，不需要等到 batch-10。
 
 **职责**：
 - 将编排器的 `call_llm(messages, tools) → _MinimalResponse` 签名桥接到 OpenAI 兼容 HTTP API
 - 零外部依赖：仅使用 Python 标准库 `urllib.request`
 - 支持任何 OpenAI 兼容 endpoint（OpenAI、Ollama、vLLM、LM Studio 等）
 
-**与组件的关系**：`MinimalLLMAdapter` 不是框架组件（不属于 `components/`），它是 kernel 自带的参考实现。用户可以直接用它，也可以用自己的 `call_llm` 替换它。它在 batch-10 时会被正式的 LLM 组件替代，但 batch-01 ~ 09 期间它就是"能跑起来"的关键。
+**与组件的关系**：`MinimalLLMAdapter` 不是框架组件（不属于 `components/`），它是 MVP 自带的参考实现。用户可以直接用它，也可以用自己的 `call_llm` 替换它。它在 batch-10 时会被正式的 LLM 组件替代，但 batch-01 ~ 09 期间它就是"能跑起来"的关键。
 
 ### 6.2 接口设计
 
@@ -743,7 +746,7 @@ def _parse_response(self, response_json: Dict) -> _MinimalResponse:
 ```
 1. 构造函数参数 api_key（显式传入，为 None 时走后续 fallback）
 2. 环境变量 OPENAI_API_KEY
-3. harness/core/.env 文件中的 api-key 或 api_key 键
+3. harness/config/.env 文件中的 api-key 或 api_key 键
 4. 都未设置 → 不报错，请求发出去后由 API 返回 401
 ```
 
@@ -808,7 +811,7 @@ class Harness:
 # 用户代码（batch-01 最小可运行示例）
 from harness.di import Harness
 from harness.core.container import DIContainer
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 1. 创建组件实例并注册
 container = DIContainer()
@@ -838,26 +841,43 @@ harness.run()
 harness/
 ├── __init__.py
 ├── di.py                            # Harness 装配入口
-└── core/
-    ├── __init__.py                  # 导出 core 模块的公开 API
-    ├── exceptions.py                # 异常体系
-    ├── container.py                 # DIContainer
-    ├── config.py                    # ConfigLoader + ProfileConfig
-    ├── orchestrator.py              # LifecycleOrchestrator + 最小数据结构
-    └── llm_adapter.py               # MinimalLLMAdapter（零依赖 OpenAI 兼容适配器）
+├── core/                            # 内核：DI 容器 + 编排器 + 异常 + 数据类型
+│   ├── __init__.py
+│   ├── exceptions.py                # 异常体系
+│   ├── container.py                 # DIContainer
+│   ├── types.py                     # 内部数据结构
+│   ├── orchestrator.py              # LifecycleOrchestrator
+│   ├── config.py                    # → 重导出，指向 harness/config
+│   └── llm_adapter.py               # → 重导出，指向 harness/adapters
+├── interfaces/                      # 组件接口类型（占位）
+│   └── __init__.py
+├── adapters/                        # 外部系统适配器
+│   ├── __init__.py
+│   └── llm_adapter.py               # MinimalLLMAdapter
+├── config/                          # 配置模块
+│   ├── __init__.py
+│   ├── loader.py                    # ConfigLoader + ProfileConfig
+│   └── .env                         # API 配置模板
+└── messaging/                       # 消息构造
+    ├── __init__.py
+    └── builder.py                   # assistant / tool_result message 构造
 ```
 
 ### 8.2 模块依赖关系（batch-01 内部）
 
 ```
-exceptions.py          ← 无内部依赖
+core/exceptions.py          ← 无内部依赖
     ↑
-    ├── container.py   ← 依赖 exceptions
-    ├── config.py      ← 依赖 exceptions
-    ├── orchestrator.py← 依赖 exceptions, container
-    └── llm_adapter.py ← 依赖 exceptions（OrchestratorError）、orchestrator（_MinimalResponse, _MinimalToolCall）
-            ↑
-         di.py         ← 依赖 orchestrator, container, llm_adapter
+    ├── core/container.py   ← 依赖 exceptions
+    ├── config/loader.py    ← 依赖 exceptions
+    ├── core/types.py       ← 无内部依赖（仅 stdlib json）
+    │       ↑
+    │       ├── core/orchestrator.py  ← 依赖 exceptions, container, types,
+    │       │                            interfaces, messaging
+    │       ├── messaging/builder.py  ← 依赖 types
+    │       └── adapters/llm_adapter  ← 依赖 exceptions, types
+    │
+    └── di.py               ← 依赖 container, exceptions, orchestrator
 ```
 
 ### 8.3 各 __init__.py 导出约定

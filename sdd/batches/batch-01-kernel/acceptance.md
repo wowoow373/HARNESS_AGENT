@@ -1,4 +1,4 @@
-# batch-01 — Kernel 验收标准
+# batch-01 — MVP 验收标准
 
 > **验收原则**：每条标准必须可验证。验证方式可以是自动化测试、手动脚本或代码审查。
 >
@@ -773,7 +773,7 @@ assert container.is_registered(IFoo) == True
 print("✓ DIContainer 正确")
 
 # --- 3. ConfigLoader ---
-from harness.core.config import ConfigLoader, ProfileConfig
+from harness.config.loader import ConfigLoader, ProfileConfig
 
 loader = ConfigLoader()
 

@@ -26,7 +26,7 @@ class TestMinimalLLMAdapterInit:
 
     def test_default_values(self):
         """不传参数时使用硬编码默认值（mock .env 为空）。"""
-        with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+        with mock.patch("harness.adapters.llm_adapter._read_simple_dotenv",
                         return_value={}):
             adapter = MinimalLLMAdapter()
         assert adapter.base_url == "https://api.openai.com/v1"
@@ -39,7 +39,7 @@ class TestMinimalLLMAdapterInit:
 
     def test_dotenv_values_used_when_no_args(self):
         """.env 文件中的 base_url、model、api_key 被自动读取。"""
-        with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+        with mock.patch("harness.adapters.llm_adapter._read_simple_dotenv",
                         return_value={
                             "base_url": "https://api.deepseek.com",
                             "api-key": "sk-dotenv",
@@ -56,7 +56,7 @@ class TestMinimalLLMAdapterInit:
         os.environ["OPENAI_API_KEY"] = "sk-env"
         os.environ["LLM_MODEL"] = "env-model"
         try:
-            with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+            with mock.patch("harness.adapters.llm_adapter._read_simple_dotenv",
                             return_value={
                                 "base_url": "https://dotenv.example.com",
                                 "api-key": "sk-dotenv",
@@ -80,7 +80,7 @@ class TestMinimalLLMAdapterInit:
         os.environ["OPENAI_API_KEY"] = "sk-env"
         os.environ["LLM_MODEL"] = "env-model"
         try:
-            with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+            with mock.patch("harness.adapters.llm_adapter._read_simple_dotenv",
                             return_value={
                                 "base_url": "https://dotenv.example.com",
                                 "api-key": "sk-dotenv",
@@ -104,7 +104,7 @@ class TestMinimalLLMAdapterInit:
         """从环境变量读取 api_key（无 .env 时）。"""
         os.environ["OPENAI_API_KEY"] = "sk-from-env"
         try:
-            with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+            with mock.patch("harness.adapters.llm_adapter._read_simple_dotenv",
                             return_value={}):
                 adapter = MinimalLLMAdapter()
             assert adapter.api_key == "sk-from-env"

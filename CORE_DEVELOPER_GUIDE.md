@@ -27,12 +27,13 @@
 
 ## 1. 概述
 
-Harness Core 是一个 **模块化 Agent 框架的微内核**。它只做两件事：
+Harness 是一个 **模块化 Agent 框架的 MVP（最小可行产品）**。它提供：
 
 1. **按固定顺序调度组件** — 三阶段生命周期（初始化 → 对话循环 → 结束）
 2. **管理组件注册与解析** — 预构造实例的 DI 容器
+3. **开箱即用的 LLM 适配器** — 零依赖 OpenAI 兼容客户端，自动从 .env 读取配置
 
-Core **不包含**任何业务逻辑。你的 Agent 具体做什么（如何压缩上下文、如何评估质量、如何存储记忆），完全由你实现的组件决定。
+框架 **不包含**任何业务逻辑。你的 Agent 具体做什么（如何压缩上下文、如何评估质量、如何存储记忆），完全由你实现的组件决定。
 
 ### 文件地图
 
@@ -40,13 +41,21 @@ Core **不包含**任何业务逻辑。你的 Agent 具体做什么（如何压�
 harness/
 ├── __init__.py              # 导出 Harness 入口类
 ├── di.py                    # Harness 装配入口（from_container + run）
-└── core/
-    ├── __init__.py          # 导出所有公开 API
-    ├── exceptions.py        # 异常体系（一个基类 + 三个分支）
-    ├── container.py         # DIContainer（注册/解析/查询）
-    ├── config.py            # ConfigLoader（TOML 配置加载）
-    ├── orchestrator.py      # LifecycleOrchestrator（三阶段编排 + 数据结构）
-    └── llm_adapter.py       # MinimalLLMAdapter（零依赖 OpenAI 兼容适配器）
+├── core/                    # 内核：DI 容器 + 编排器 + 异常 + 数据类型
+│   ├── __init__.py          # 导出所有公开 API
+│   ├── exceptions.py        # 异常体系
+│   ├── container.py         # DIContainer（注册/解析/查询）
+│   ├── types.py             # 内部数据结构
+│   └── orchestrator.py      # LifecycleOrchestrator（三阶段编排）
+├── interfaces/              # 组件接口类型（占位）
+│   └── __init__.py
+├── adapters/                # 外部系统适配器
+│   └── llm_adapter.py       # MinimalLLMAdapter
+├── config/                  # 配置模块
+│   ├── loader.py            # ConfigLoader + ProfileConfig
+│   └── .env                 # API 配置模板
+└── messaging/               # 消息构造
+    └── builder.py           # assistant / tool_result 消息构造
 ```
 
 ---
@@ -60,7 +69,7 @@ from harness.core.orchestrator import (
     InputAdapter, Sensor,
     _MinimalUserRequest, _MinimalResponse,
 )
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 1. 创建容器 + 注册组件
 container = DIContainer()
@@ -473,7 +482,7 @@ harness.run()
 框架自带零依赖的 OpenAI 兼容适配器。所有参数均可选 —— 不传时自动从环境变量和 `.env` 文件读取：
 
 ```python
-from harness.core.llm_adapter import MinimalLLMAdapter
+from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 零配置：全部从环境变量 / .env 读取
 adapter = MinimalLLMAdapter()
@@ -498,7 +507,7 @@ adapter = MinimalLLMAdapter(
 | 3. .env 文件 | `base_url` | `api-key` / `api_key` | `model` |
 | 4. 硬编码默认 | `https://api.openai.com/v1` | `""` | `gpt-4o` |
 
-**`.env` 文件示例**（放在 `harness/core/.env`）：
+**`.env` 文件示例**（放在 `harness/config/.env`）：
 
 ```ini
 # 第三方 API 配置示例（如 DeepSeek）
@@ -574,7 +583,7 @@ sensor = true
 ### 8.2 使用方式
 
 ```python
-from harness.core.config import ConfigLoader
+from harness.config.loader import ConfigLoader
 
 loader = ConfigLoader()
 config = loader.load("./profile.toml")   # 返回 ProfileConfig

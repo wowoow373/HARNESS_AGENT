@@ -8,7 +8,7 @@
 
 | # | 批次名称 | 目标一句话 | 依赖 | 主要产出 |
 |---|---------|-----------|------|---------|
-| 01 | kernel | DI 容器 + 生命周期编排器 + 配置加载 | 无 | `harness/core/*`, `harness/di.py` |
+| 01 | mvp | DI 容器 + 生命周期编排 + 配置加载 + LLM 适配器 + 组件接口占位 | 无 | `harness/core/*`, `harness/interfaces/*`, `harness/adapters/*`, `harness/config/*`, `harness/messaging/*`, `harness/di.py` |
 | 02 | interfaces | 所有组件的抽象接口 + 大包对象定义 | 01 | `harness/interfaces/*` |
 | 03 | memory-backend | MemoryBackend 接口 + JsonlMemory 实现 | 02 | `harness/components/memory_backend/` |
 | 04 | guide-provider | GuideProvider 接口 + FileGuideProvider 实现 | 02 | `harness/components/guide_provider/` |
@@ -26,7 +26,7 @@
 组件间的接口依赖决定了实现顺序。以下标记了每个批次实际需要其依赖组件提供的**数据结构**（非运行时调用）。
 
 ```
-01-kernel          ← 无依赖
+01-mvp          ← 无依赖
     ↓
 02-interfaces      ← 依赖 01（DI 容器基础设施，用于接口注册）
     ↓
@@ -50,16 +50,21 @@
 
 ## 三、各批次范围说明
 
-### 01 — kernel（内核）
+### 01 — mvp（最小可行产品）
 
 **范围：**
 - `DIContainer` 类：预构造实例注册模式（`register(interface, instance)` + `resolve(interface)`）
 - `LifecycleOrchestrator` 类：按三阶段（初始化→循环→结束）编排组件调用
-- TOML 配置解析器：读取 `profile.toml`，返回配置字典
-- 框架会调用还没有实现的接口 → 因此，接口缺失时不阻塞，只需**可观测**（见 06-acceptance.md）
+- `MinimalLLMAdapter`：零依赖 OpenAI 兼容适配器，支持从环境变量和 ``harness/config/.env`` 读取配置
+- 组件接口占位类型（`harness/interfaces/`）：作为 DI 容器注册 key
+- 内部数据结构（`harness/core/types.py`）：`_Minimal*` 类型
+- 消息构造工具（`harness/messaging/`）：OpenAI 兼容消息格式转换
+- TOML 配置解析器（`harness/config/`）：读取 `profile.toml`，返回结构化配置
+- 组件缺失时不阻塞，WARNING 日志 + 跳过对应步骤
 
 **不在范围：**
-- 任何组件实现
+- 任何组件具体实现（那是 batch-03 ~ 08）
+- 正式的 Protocol/ABC 接口定义（那是 batch-02）
 - Hook 系统（那是 batch-09）
 - CLI 入口（那是 batch-10）
 
