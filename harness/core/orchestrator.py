@@ -94,10 +94,16 @@ class _MinimalGuidesBundle:
 
     Attributes:
         identity: 核心身份定义。
+        capabilities: 能力清单。
         rules: 行为规则列表。
+        constraints: 硬约束列表。
+        examples: 少样本示例列表。
     """
     identity: str = ""
+    capabilities: List[str] = field(default_factory=list)
     rules: List[str] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    examples: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -107,13 +113,31 @@ class _MinimalAssemblyContext:
     Attributes:
         user_request: 当前用户请求。
         guides: 来自 GuideProvider 的 GuidesBundle。
+        available_tools: 可用工具定义列表。
         history: 当前会话的对话历史。
-        metadata: 扩展元数据（如 memories 列表等）。
+        memories: 从 MemoryBackend 检索的记忆。
+        system_state: 系统当前状态。
+        metadata: 领域扩展桶，框架不解释。
     """
     user_request: Optional[_MinimalUserRequest] = None
     guides: Optional[_MinimalGuidesBundle] = None
+    available_tools: List[Dict[str, Any]] = field(default_factory=list)
     history: List[Dict[str, Any]] = field(default_factory=list)
+    memories: List[Dict[str, Any]] = field(default_factory=list)
+    system_state: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class _MinimalToolCallFunction:
+    """工具调用函数描述。
+
+    Attributes:
+        name: 函数名。
+        arguments: JSON 编码的参数字符串。
+    """
+    name: str = ""
+    arguments: str = "{}"
 
 
 @dataclass
@@ -122,20 +146,20 @@ class _MinimalToolCall:
 
     Attributes:
         id: tool call 唯一标识（如 "call_abc123"）。
-        name: 函数名。
-        arguments: JSON 编码的参数字符串。
+        type: 固定为 "function"。
+        function: 函数名与参数。
     """
     id: str
-    name: str
-    arguments: str  # JSON string, 执行时由编排器 parse 为 dict
+    type: str = "function"
+    function: _MinimalToolCallFunction = field(default_factory=_MinimalToolCallFunction)
 
     def parse_arguments(self) -> Dict[str, Any]:
-        """将 arguments JSON string 解析为 dict。
+        """将 function.arguments JSON string 解析为 dict。
 
         Returns:
             解析后的参数字典。
         """
-        return json.loads(self.arguments)
+        return json.loads(self.function.arguments)
 
 
 @dataclass
@@ -149,10 +173,12 @@ class _MinimalResponse:
 
     Attributes:
         text: LLM 文本输出（可为 None）。
+        thinking: LLM 思考/推理过程（可为 None）。
         tool_uses: 工具调用列表（可为空）。
         stop_reason: 停止原因。
     """
     text: Optional[str] = None
+    thinking: Optional[str] = None
     tool_uses: List[_MinimalToolCall] = field(default_factory=list)
     stop_reason: str = "end_turn"
 
@@ -162,15 +188,21 @@ class _MinimalTrajectory:
     """最小化的 Trajectory 表示。
 
     Attributes:
+        user_request: 用户原始请求。
         history: 完整对话历史。
-        tool_call_records: 所有工具调用记录与执行结果。
+        tool_calls: 所有工具调用记录与执行结果。
         final_output: Agent 最终输出。
         execution_time: 执行耗时（秒）。
+        system_state: 系统当前状态。
+        metadata: 扩展元数据。
     """
+    user_request: Optional[_MinimalUserRequest] = None
     history: List[Dict[str, Any]] = field(default_factory=list)
-    tool_call_records: List[Dict[str, Any]] = field(default_factory=list)
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     final_output: str = ""
     execution_time: float = 0.0
+    system_state: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +224,8 @@ class LifecycleOrchestrator:
         orch.run()
     """
 
-    # 退出关键词集合
-    _EXIT_KEYWORDS = frozenset({"/exit", "/quit", "/bye"})
+    # 退出关键词
+    _EXIT_KEYWORD = "/exit"
 
     # 内层循环最大迭代次数（防止无限 tool-calling 循环）
     _MAX_TOOL_ITERATIONS = 100
@@ -250,7 +282,8 @@ class LifecycleOrchestrator:
                 raise
             raise OrchestratorError(str(e)) from e
         finally:
-            self._phase_end()
+            trajectory = self._build_trajectory()
+            self._phase_end(trajectory)
 
     # ------------------------------------------------------------------
     # 阶段一：会话初始化
@@ -280,6 +313,12 @@ class LifecycleOrchestrator:
         raw_request = adapter.receive()
         user_request = self._normalize_user_request(raw_request)
         logger.debug(f"Received user request: {user_request.text}")
+
+        # 检查退出信号 — 用户在第一轮就发出退出指令时直接跳到阶段三
+        if self._should_exit(user_request):
+            logger.info("Exit signal received in phase init, skipping to phase end")
+            self._should_exit_flag = True
+            return _MinimalAssemblyContext(user_request=user_request)
 
         # 2. GuideProvider（可选）
         guides = _MinimalGuidesBundle()
@@ -321,11 +360,9 @@ class LifecycleOrchestrator:
         ctx = _MinimalAssemblyContext(
             user_request=user_request,
             guides=guides,
+            available_tools=available_tools,
             history=self._history,
-            metadata={
-                "memories": memories,
-                "available_tools": available_tools,
-            },
+            memories=memories,
         )
 
         logger.info("Phase 1: Session initialization complete")
@@ -420,11 +457,13 @@ class LifecycleOrchestrator:
                         else:
                             try:
                                 if tool_registry:
-                                    result = tool_registry.execute(tc.name, args)
+                                    result = tool_registry.execute(
+                                        tc.function.name, args
+                                    )
                                 else:
                                     error = (
                                         f"ToolRegistry not registered, "
-                                        f"cannot execute tool '{tc.name}'"
+                                        f"cannot execute tool '{tc.function.name}'"
                                     )
                             except Exception as e:
                                 error = str(e)
@@ -442,7 +481,7 @@ class LifecycleOrchestrator:
 
                         # 记录到 tool_call_records
                         self._tool_call_records.append({
-                            "tool_name": tc.name,
+                            "tool_name": tc.function.name,
                             "arguments": args,
                             "result": content if success else None,
                             "started_at": before_ts,
@@ -494,11 +533,9 @@ class LifecycleOrchestrator:
             ctx = _MinimalAssemblyContext(
                 user_request=new_request,
                 guides=self._cached_guides,
+                available_tools=self._cached_tools,
                 history=self._history,
-                metadata={
-                    "memories": ctx.metadata.get("memories", []),
-                    "available_tools": self._cached_tools,
-                },
+                memories=ctx.memories,
             )
 
         logger.info("Phase 2: Conversation loop ended")
@@ -507,17 +544,17 @@ class LifecycleOrchestrator:
     # 阶段三：会话结束
     # ------------------------------------------------------------------
 
-    def _phase_end(self) -> None:
+    def _phase_end(self, trajectory: _MinimalTrajectory) -> None:
         """阶段三：会话结束。
 
-        组装 Trajectory → Sensor.sense() → 清理内部状态。
+        Args:
+            trajectory: run() 中组装好的完整执行轨迹。
+
+        Sensor.sense(trajectory) → 清理内部状态。
         """
         logger.info("Phase 3: Session end starting")
 
-        # 1. 组装 Trajectory
-        trajectory = self._build_trajectory()
-
-        # 2. Sensor（可选）
+        # 1. Sensor（可选）
         sensor = self._resolve_optional(Sensor)
         if sensor:
             try:
@@ -526,7 +563,7 @@ class LifecycleOrchestrator:
             except Exception as e:
                 logger.warning(f"Sensor.sense() failed: {e}")
 
-        # 3. 清理内部状态
+        # 2. 清理内部状态
         self._history.clear()
         self._tool_call_records.clear()
         self._should_exit_flag = False
@@ -559,7 +596,7 @@ class LifecycleOrchestrator:
 
         退出条件（任一满足即退出）：
         1. user_request.text 为 None 或空字符串或仅空白字符
-        2. user_request.text 匹配退出关键词（/exit, /quit, /bye）
+        2. user_request.text 匹配退出关键词 "/exit"
         3. user_request.metadata 中包含 "exit": True
 
         Args:
@@ -572,7 +609,7 @@ class LifecycleOrchestrator:
             return True
         if user_request.text.strip() == "":
             return True
-        if user_request.text.strip() in self._EXIT_KEYWORDS:
+        if user_request.text.strip() == self._EXIT_KEYWORD:
             return True
         if user_request.metadata.get("exit") is True:
             return True
@@ -613,10 +650,10 @@ class LifecycleOrchestrator:
             msg["tool_calls"] = [
                 {
                     "id": tc.id,
-                    "type": "function",
+                    "type": tc.type,
                     "function": {
-                        "name": tc.name,
-                        "arguments": tc.arguments,
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
                     },
                 }
                 for tc in response.tool_uses
@@ -675,7 +712,7 @@ class LifecycleOrchestrator:
 
         return _MinimalTrajectory(
             history=list(self._history),
-            tool_call_records=list(self._tool_call_records),
+            tool_calls=list(self._tool_call_records),
             final_output=final_output,
             execution_time=execution_time,
         )
@@ -728,8 +765,17 @@ class LifecycleOrchestrator:
         if isinstance(raw, _MinimalGuidesBundle):
             return raw
         identity = getattr(raw, "identity", "")
+        capabilities = getattr(raw, "capabilities", [])
         rules = getattr(raw, "rules", [])
-        return _MinimalGuidesBundle(identity=identity, rules=rules)
+        constraints = getattr(raw, "constraints", [])
+        examples = getattr(raw, "examples", [])
+        return _MinimalGuidesBundle(
+            identity=identity,
+            capabilities=capabilities,
+            rules=rules,
+            constraints=constraints,
+            examples=examples,
+        )
 
     @staticmethod
     def _normalize_response(raw: Any) -> _MinimalResponse:
@@ -743,6 +789,7 @@ class LifecycleOrchestrator:
             return raw
 
         text = getattr(raw, "text", None)
+        thinking = getattr(raw, "thinking", None)
         stop_reason = getattr(raw, "stop_reason", "end_turn")
         raw_tool_uses = getattr(raw, "tool_uses", [])
 
@@ -753,12 +800,16 @@ class LifecycleOrchestrator:
             else:
                 tool_uses.append(_MinimalToolCall(
                     id=getattr(tc, "id", ""),
-                    name=getattr(tc, "name", ""),
-                    arguments=getattr(tc, "arguments", "{}"),
+                    type=getattr(tc, "type", "function"),
+                    function=_MinimalToolCallFunction(
+                        name=getattr(tc, "name", ""),
+                        arguments=getattr(tc, "arguments", "{}"),
+                    ),
                 ))
 
         return _MinimalResponse(
             text=text,
+            thinking=thinking,
             tool_uses=tool_uses,
             stop_reason=stop_reason,
         )

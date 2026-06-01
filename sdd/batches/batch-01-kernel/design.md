@@ -287,10 +287,14 @@ class LifecycleOrchestrator:
 ```python
 # 编排器中的组件解析策略
 def _resolve_optional(self, interface: type) -> Optional[Any]:
-    """尝试解析组件，不存在时返回 None 并记录 WARNING 日志。"""
-    if self.container.is_registered(interface):
+    """尝试解析组件，不存在时返回 None 并记录 WARNING 日志。
+
+    使用 resolve + except 而非 is_registered + resolve，
+    保证原子性（单次 dict 查找），避免两次调用之间的 TOCTOU 窗口。
+    """
+    try:
         return self.container.resolve(interface)
-    else:
+    except ComponentNotRegisteredError:
         logger.warning(f"Component {interface.__name__} not registered, skipping")
         return None
 ```
@@ -299,7 +303,7 @@ def _resolve_optional(self, interface: type) -> Optional[Any]:
 |------|------|------|
 | **必需组件** | InputAdapter（至少用于 I/O） | 缺失时抛异常，无法运行 |
 | **可选组件** | GuideProvider, MemoryBackend, Sensor 等 | 缺失时 skip + WARNING 日志，不阻塞流程 |
-| **LLM callable** | call_llm 参数 | None 时，tool_use 循环不可用，但仍可验证编排流程 |
+| **LLM callable** | call_llm 参数 | None 时 tool_use 循环不可用，编排器仅验证控制流。**此模式仅用于调试和测试**，生产环境必须传入有效 LLM 适配器。Harness.from_container() 在 call_llm=None 时会输出 WARNING 日志。 |
 
 **设计意图**：batch-01 中的编排器是一个**可运行的骨架**。即使没有真实组件，也能用 mock 验证整个流程的控制流。
 
@@ -470,7 +474,7 @@ class ConfigLoader:
         - [meta] 段必须存在
         - meta.name 必须是非空字符串
         - meta.template 必须是非空字符串
-        - [modules] 段可选，缺失时所有模块默认 true
+        - [modules] 段可选，缺失时 modules 返回空 dict（由装配层根据领域模板决定默认行为）
         - modules 中的值必须是布尔类型
 
         Raises:
@@ -737,9 +741,10 @@ def _parse_response(self, response_json: Dict) -> _MinimalResponse:
 ### 6.6 API Key 读取优先级
 
 ```
-1. 构造函数参数 api_key（显式传入）
+1. 构造函数参数 api_key（显式传入，为 None 时走后续 fallback）
 2. 环境变量 OPENAI_API_KEY
-3. 两者都为空 → 不报错，请求发出去后由 API 返回 401
+3. harness/core/.env 文件中的 api-key 或 api_key 键
+4. 都未设置 → 不报错，请求发出去后由 API 返回 401
 ```
 
 ### 6.7 关键设计决策

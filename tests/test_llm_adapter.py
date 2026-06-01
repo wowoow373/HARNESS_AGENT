@@ -9,8 +9,11 @@ from unittest import mock
 import pytest
 
 from harness.core.exceptions import OrchestratorError
-from harness.core.llm_adapter import MinimalLLMAdapter
-from harness.core.orchestrator import _MinimalResponse, _MinimalToolCall
+from harness.core.llm_adapter import (
+    MinimalLLMAdapter,
+    _read_simple_dotenv,
+)
+from harness.core.orchestrator import _MinimalResponse, _MinimalToolCall, _MinimalToolCallFunction
 
 
 # ---------------------------------------------------------------------------
@@ -22,14 +25,75 @@ class TestMinimalLLMAdapterInit:
     """MinimalLLMAdapter 构造函数测试。"""
 
     def test_default_values(self):
-        """默认参数值正确。"""
-        adapter = MinimalLLMAdapter()
+        """不传参数时使用硬编码默认值（mock .env 为空）。"""
+        with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+                        return_value={}):
+            adapter = MinimalLLMAdapter()
         assert adapter.base_url == "https://api.openai.com/v1"
+        assert adapter.api_key == ""
         assert adapter.model == "gpt-4o"
         assert adapter.max_tokens == 4096
         assert adapter.temperature == 0.7
         assert adapter.timeout == 120
         assert adapter._endpoint == "https://api.openai.com/v1/chat/completions"
+
+    def test_dotenv_values_used_when_no_args(self):
+        """.env 文件中的 base_url、model、api_key 被自动读取。"""
+        with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+                        return_value={
+                            "base_url": "https://api.deepseek.com",
+                            "api-key": "sk-dotenv",
+                            "model": "deepseek-v4-flash",
+                        }):
+            adapter = MinimalLLMAdapter()
+        assert adapter.base_url == "https://api.deepseek.com"
+        assert adapter.api_key == "sk-dotenv"
+        assert adapter.model == "deepseek-v4-flash"
+        assert adapter._endpoint == "https://api.deepseek.com/chat/completions"
+
+    def test_explicit_args_override_dotenv(self):
+        """显式参数优先于 .env 和环境变量。"""
+        os.environ["OPENAI_API_KEY"] = "sk-env"
+        os.environ["LLM_MODEL"] = "env-model"
+        try:
+            with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+                            return_value={
+                                "base_url": "https://dotenv.example.com",
+                                "api-key": "sk-dotenv",
+                                "model": "dotenv-model",
+                            }):
+                adapter = MinimalLLMAdapter(
+                    base_url="https://explicit.example.com",
+                    api_key="sk-explicit",
+                    model="explicit-model",
+                )
+            assert adapter.base_url == "https://explicit.example.com"
+            assert adapter.api_key == "sk-explicit"
+            assert adapter.model == "explicit-model"
+        finally:
+            del os.environ["OPENAI_API_KEY"]
+            del os.environ["LLM_MODEL"]
+
+    def test_env_vars_override_dotenv(self):
+        """环境变量优先于 .env 文件。"""
+        os.environ["LLM_BASE_URL"] = "https://env.example.com"
+        os.environ["OPENAI_API_KEY"] = "sk-env"
+        os.environ["LLM_MODEL"] = "env-model"
+        try:
+            with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+                            return_value={
+                                "base_url": "https://dotenv.example.com",
+                                "api-key": "sk-dotenv",
+                                "model": "dotenv-model",
+                            }):
+                adapter = MinimalLLMAdapter()
+            assert adapter.base_url == "https://env.example.com"
+            assert adapter.api_key == "sk-env"
+            assert adapter.model == "env-model"
+        finally:
+            del os.environ["LLM_BASE_URL"]
+            del os.environ["OPENAI_API_KEY"]
+            del os.environ["LLM_MODEL"]
 
     def test_explicit_api_key(self):
         """显式传入 api_key 被使用。"""
@@ -37,10 +101,12 @@ class TestMinimalLLMAdapterInit:
         assert adapter.api_key == "sk-test123"
 
     def test_api_key_from_env(self):
-        """从环境变量读取 api_key。"""
+        """从环境变量读取 api_key（无 .env 时）。"""
         os.environ["OPENAI_API_KEY"] = "sk-from-env"
         try:
-            adapter = MinimalLLMAdapter()
+            with mock.patch("harness.core.llm_adapter._read_simple_dotenv",
+                            return_value={}):
+                adapter = MinimalLLMAdapter()
             assert adapter.api_key == "sk-from-env"
         finally:
             del os.environ["OPENAI_API_KEY"]
@@ -75,7 +141,6 @@ class TestMinimalLLMAdapterInit:
 
     def test_empty_api_key_allowed(self):
         """空 api_key 不立即报错。"""
-        # 确保环境变量未设置
         os.environ.pop("OPENAI_API_KEY", None)
         adapter = MinimalLLMAdapter(api_key="")
         assert adapter.api_key == ""
@@ -195,8 +260,8 @@ class TestParseResponse:
         assert result.text is None
         assert len(result.tool_uses) == 1
         assert result.tool_uses[0].id == "call_abc123"
-        assert result.tool_uses[0].name == "read"
-        assert result.tool_uses[0].arguments == '{"path": "/tmp/x"}'
+        assert result.tool_uses[0].function.name == "read"
+        assert result.tool_uses[0].function.arguments == '{"path": "/tmp/x"}'
         assert result.stop_reason == "tool_use"
 
     def test_parse_coexistence_response(self):
@@ -261,8 +326,8 @@ class TestParseResponse:
         }
         result = adapter._parse_response(response_json)
         assert len(result.tool_uses) == 2
-        assert result.tool_uses[0].name == "read"
-        assert result.tool_uses[1].name == "write"
+        assert result.tool_uses[0].function.name == "read"
+        assert result.tool_uses[1].function.name == "write"
 
     def test_parse_invalid_response_raises(self):
         """无效响应（缺少 choices）抛出 OrchestratorError。"""

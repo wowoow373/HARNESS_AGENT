@@ -3,11 +3,14 @@
 提供 Harness 类，封装从 DI 容器解析组件到启动编排的完整流程。
 """
 
+import logging
 from typing import Callable, Optional
 
 from .core.container import DIContainer
 from .core.exceptions import ComponentNotRegisteredError
 from .core.orchestrator import InputAdapter, LifecycleOrchestrator
+
+logger = logging.getLogger(__name__)
 
 
 class Harness:
@@ -57,6 +60,12 @@ class Harness:
         if not container.is_registered(InputAdapter):
             raise ComponentNotRegisteredError(
                 "InputAdapter is required but not registered"
+            )
+        if call_llm is None:
+            logger.warning(
+                "call_llm is None — LLM calls will be skipped. "
+                "This mode is intended only for debugging/testing; "
+                "production use requires a valid LLM adapter."
             )
         orchestrator = LifecycleOrchestrator(container, call_llm=call_llm)
         return Harness(orchestrator)

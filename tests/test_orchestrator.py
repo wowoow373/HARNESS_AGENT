@@ -7,6 +7,7 @@ import pytest
 from harness.core.container import DIContainer
 from harness.core.exceptions import ComponentNotRegisteredError, OrchestratorError
 from harness.core.orchestrator import (
+    _MinimalToolCallFunction,
     ContextAssembler,
     GuideProvider,
     InputAdapter,
@@ -59,12 +60,10 @@ class TestMinimalDataStructures:
 
     def test_tool_call_creation_and_parse(self):
         """_MinimalToolCall 创建与 JSON 解析。"""
-        tc = _MinimalToolCall(
-            id="call_1", name="read", arguments='{"path": "/tmp/x"}'
-        )
+        tc = _MinimalToolCall(id="call_1", function=_MinimalToolCallFunction(name="read", arguments='{"path": "/tmp/x"}'))
         assert tc.id == "call_1"
-        assert tc.name == "read"
-        assert tc.arguments == '{"path": "/tmp/x"}'
+        assert tc.function.name == "read"
+        assert tc.function.arguments == '{"path": "/tmp/x"}'
         parsed = tc.parse_arguments()
         assert parsed == {"path": "/tmp/x"}
         assert isinstance(parsed, dict)
@@ -79,24 +78,20 @@ class TestMinimalDataStructures:
         """_MinimalResponse 纯 tool_use。"""
         resp = _MinimalResponse(
             tool_uses=[
-                _MinimalToolCall(
-                    id="c1", name="read", arguments='{"path":"/x"}'
-                )
+                _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path":"/x"}'))
             ],
             stop_reason="tool_use",
         )
         assert resp.text is None
         assert len(resp.tool_uses) == 1
-        assert resp.tool_uses[0].name == "read"
+        assert resp.tool_uses[0].function.name == "read"
 
     def test_response_text_and_tool_uses_coexistence(self):
         """_MinimalResponse text + tool_uses 共存。"""
         resp = _MinimalResponse(
             text="Let me check that file",
             tool_uses=[
-                _MinimalToolCall(
-                    id="c1", name="read", arguments='{"path":"/x"}'
-                )
+                _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path":"/x"}'))
             ],
             stop_reason="end_turn",
         )
@@ -107,13 +102,13 @@ class TestMinimalDataStructures:
         """_MinimalTrajectory 正常创建。"""
         traj = _MinimalTrajectory(
             history=[{"role": "user", "content": "hi"}],
-            tool_call_records=[{"tool_name": "read", "result": "data"}],
+            tool_calls=[{"tool_name": "read", "result": "data"}],
             final_output="done",
             execution_time=1.5,
         )
         assert traj.final_output == "done"
         assert len(traj.history) == 1
-        assert len(traj.tool_call_records) == 1
+        assert len(traj.tool_calls) == 1
         assert traj.execution_time == 1.5
 
 
@@ -229,10 +224,8 @@ class TestShouldExit:
         assert orch._should_exit(_MinimalUserRequest(text="\t\n")) is True
 
     def test_exit_command_exits(self, orch):
-        """退出关键词触发退出。"""
+        """退出关键词 /exit 触发退出。"""
         assert orch._should_exit(_MinimalUserRequest(text="/exit")) is True
-        assert orch._should_exit(_MinimalUserRequest(text="/quit")) is True
-        assert orch._should_exit(_MinimalUserRequest(text="/bye")) is True
 
     def test_metadata_exit_flag(self, orch):
         """metadata 中的 exit 标志触发退出。"""
@@ -341,7 +334,7 @@ class TestPhaseInit:
         orch = LifecycleOrchestrator(container)
         ctx = orch._phase_init()
 
-        memories = ctx.metadata.get("memories", [])
+        memories = ctx.memories
         assert len(memories) == 1
         assert memories[0]["key"] == "mem1"
 
@@ -372,6 +365,26 @@ class TestPhaseInit:
 
         with pytest.raises(ComponentNotRegisteredError):
             orch._phase_init()
+
+    def test_init_first_round_exit_skips_to_phase_end(self):
+        """第一轮输入 /exit 时跳过 _phase_loop 直接返回。"""
+        container = DIContainer()
+
+        class ExitAdapter:
+            def receive(self):
+                return _MinimalUserRequest(text="/exit")
+            def send(self, r):
+                pass
+
+        container.register(InputAdapter, ExitAdapter())
+
+        orch = LifecycleOrchestrator(container)
+        ctx = orch._phase_init()
+
+        # 退出标志已设，返回了最小 ctx
+        assert orch._should_exit_flag is True
+        assert ctx.user_request is not None
+        assert ctx.user_request.text == "/exit"
 
 
 # ---------------------------------------------------------------------------
@@ -494,11 +507,7 @@ class TestPhaseLoop:
             if call_count[0] == 1:
                 return _MinimalResponse(
                     tool_uses=[
-                        _MinimalToolCall(
-                            id="c1",
-                            name="read",
-                            arguments='{"path": "/tmp/x"}',
-                        )
+                        _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
                     ],
                     stop_reason="tool_use",
                 )
@@ -549,11 +558,7 @@ class TestPhaseLoop:
             return _MinimalResponse(
                 text="Let me check that file for you",
                 tool_uses=[
-                    _MinimalToolCall(
-                        id="c1",
-                        name="read",
-                        arguments='{"path": "/tmp/x"}',
-                    )
+                    _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
                 ],
                 stop_reason="end_turn",
             )
@@ -608,11 +613,7 @@ class TestPhaseLoop:
             if call_count[0] == 1:
                 return _MinimalResponse(
                     tool_uses=[
-                        _MinimalToolCall(
-                            id="c1",
-                            name="write",
-                            arguments='{"path":"/protected/file"}',
-                        )
+                        _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="write", arguments='{"path":"/protected/file"}')),
                     ],
                     stop_reason="tool_use",
                 )
@@ -676,9 +677,7 @@ class TestPhaseLoop:
             if call_count[0] == 1:
                 return _MinimalResponse(
                     tool_uses=[
-                        _MinimalToolCall(
-                            id="c1", name="read", arguments='{"path":"/x"}'
-                        )
+                        _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path":"/x"}'))
                     ],
                     stop_reason="tool_use",
                 )
@@ -728,7 +727,8 @@ class TestPhaseEnd:
         ]
         orch._start_time = time.time() - 5.0
 
-        orch._phase_end()
+        trajectory = orch._build_trajectory()
+        orch._phase_end(trajectory)
 
         sensor = container.resolve(Sensor)
         assert sensor.received_trajectory is not None
@@ -741,7 +741,8 @@ class TestPhaseEnd:
         container = DIContainer()
         orch = LifecycleOrchestrator(container)
         orch._history = [{"role": "assistant", "content": "done"}]
-        orch._phase_end()  # 不抛异常
+        trajectory = orch._build_trajectory()
+        orch._phase_end(trajectory)
 
     def test_trajectory_contains_execution_time(self):
         """Trajectory 包含正确的执行时间。"""
@@ -759,7 +760,8 @@ class TestPhaseEnd:
         orch = LifecycleOrchestrator(container)
         orch._start_time = time.time() - 3.0
         orch._history = [{"role": "assistant", "content": "done"}]
-        orch._phase_end()
+        trajectory = orch._build_trajectory()
+        orch._phase_end(trajectory)
 
         sensor = container.resolve(Sensor)
         assert sensor.traj.execution_time >= 3.0
@@ -772,7 +774,8 @@ class TestPhaseEnd:
         orch._tool_call_records = [{"tool_name": "read"}]
         orch._should_exit_flag = True
 
-        orch._phase_end()
+        trajectory = orch._build_trajectory()
+        orch._phase_end(trajectory)
 
         assert len(orch._history) == 0
         assert len(orch._tool_call_records) == 0

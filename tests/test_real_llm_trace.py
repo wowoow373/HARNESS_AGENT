@@ -49,6 +49,7 @@ print()
 from harness.core.container import DIContainer
 from harness.core.llm_adapter import MinimalLLMAdapter
 from harness.core.orchestrator import (
+    _MinimalToolCallFunction,
     InputAdapter,
     Sensor,
     ContextAssembler,
@@ -159,8 +160,8 @@ has_text = response2.text is not None and len(response2.text) > 0
 print(f"  tool_uses 数量: {len(response2.tool_uses)}")
 if response2.tool_uses:
     tc = response2.tool_uses[0]
-    print(f"  tool name: {tc.name}")
-    print(f"  tool args: {tc.arguments}")
+    print(f"  tool name: {tc.function.name}")
+    print(f"  tool args: {tc.function.arguments}")
 print(f"  text: {repr(response2.text[:200]) if response2.text else None}")
 print(f"  stop_reason: {response2.stop_reason}")
 
@@ -238,7 +239,7 @@ orch._cached_tools = []
 
 ctx = orch._phase_init()
 orch._phase_loop(ctx)
-orch._phase_end()
+trajectory = orch._build_trajectory(); orch._phase_end(trajectory)
 t3_elapsed = time.time() - t3_start
 
 # ── 验证 ──
@@ -335,7 +336,7 @@ orch4._cached_tools = []
 
 ctx4 = orch4._phase_init()
 orch4._phase_loop(ctx4)
-orch4._phase_end()
+trajectory4 = orch4._build_trajectory(); orch4._phase_end(trajectory4)
 t4_elapsed = time.time() - t4_start
 
 adapter4 = container4.resolve(InputAdapter)
@@ -372,7 +373,8 @@ print(f"  Passed:  {passed}/{total}")
 print(f"  Failed:  {failed}/{total}")
 print(f"{'='*60}")
 
-if failed > 0:
-    sys.exit(1)
-else:
-    print("全部测试通过！batch-01 真实 LLM trace 验证成功。")
+if __name__ == "__main__":
+    if failed > 0:
+        sys.exit(1)
+    else:
+        print("全部测试通过！batch-01 真实 LLM trace 验证成功。")

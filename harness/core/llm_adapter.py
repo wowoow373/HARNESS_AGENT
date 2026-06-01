@@ -6,22 +6,46 @@
 
 用法::
 
-    adapter = MinimalLLMAdapter(
-        base_url="https://api.openai.com/v1",
-        api_key="sk-xxx",
-        model="gpt-4o",
-    )
+    adapter = MinimalLLMAdapter()
     response = adapter(messages, tools)
+
+不传任何参数时，自动从环境变量和 ``harness/core/.env`` 读取配置。
 """
 
 import json as json_module
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .exceptions import OrchestratorError
-from .orchestrator import _MinimalResponse, _MinimalToolCall
+from .orchestrator import _MinimalResponse, _MinimalToolCall, _MinimalToolCallFunction
+
+# ── .env 文件默认路径 ──────────────────────────────────────────────
+
+_DEFAULT_ENV_PATH = Path(__file__).resolve().parent / ".env"
+
+
+def _read_simple_dotenv(path: Path) -> Dict[str, str]:
+    """读取简单 ``key = value`` 格式的 .env 文件。
+
+    忽略空行和 ``#`` 开头的注释行。
+    如文件不存在或不可读，返回空 dict。
+    """
+    config: Dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    config[key.strip()] = value.strip()
+    except (FileNotFoundError, PermissionError):
+        pass
+    return config
 
 
 class MinimalLLMAdapter:
@@ -31,41 +55,79 @@ class MinimalLLMAdapter:
     零外部依赖，开箱即用。实现 call_llm 签名约定，
     可直接注入 LifecycleOrchestrator。
 
-    用法::
+    ``base_url``、``api_key``、``model`` 三个核心参数都支持从
+    ``harness/core/.env`` 文件自动读取，实现零配置启动：:
 
-        adapter = MinimalLLMAdapter(
-            base_url="https://api.openai.com/v1",
-            api_key="sk-xxx",
-            model="gpt-4o",
-        )
+        # 无需传参，自动从 .env 读取
+        adapter = MinimalLLMAdapter()
         harness = Harness.from_container(container, call_llm=adapter)
     """
 
     def __init__(
         self,
-        base_url: str = "https://api.openai.com/v1",
-        api_key: str = "",
-        model: str = "gpt-4o",
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
         timeout: int = 120,
     ):
         """初始化适配器。
 
+        ``base_url``、``api_key``、``model`` 为 None 时按以下优先级解析：
+
+        ==============  =================  ================  ===============
+        优先级           base_url           api_key           model
+        ==============  =================  ================  ===============
+        1. 显式参数       base_url           api_key           model
+        2. 环境变量       ``LLM_BASE_URL``   ``OPENAI_API_KEY`` ``LLM_MODEL``
+        3. .env 文件      ``base_url``       ``api-key`` /     ``model``
+                                              ``api_key``
+        4. 硬编码默认值   ``https://api.     ``""``              ``gpt-4o``
+                          openai.com/v1``
+        ==============  =================  ================  ===============
+
         Args:
             base_url: OpenAI 兼容 API 的 base URL。
-                      支持替换为 Ollama (http://localhost:11434/v1)、
-                      vLLM 等任何兼容端点。
-            api_key: API 密钥。空字符串时从环境变量
-                     OPENAI_API_KEY 读取。
+            api_key: API 密钥。
             model: 模型名称。
             max_tokens: 最大生成 token 数。
             temperature: 采样温度 (0.0 ~ 2.0)。
             timeout: HTTP 请求超时时间（秒）。
         """
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-        self.model = model
+        dotenv = _read_simple_dotenv(_DEFAULT_ENV_PATH)
+
+        # base_url
+        if base_url is not None:
+            self.base_url = base_url.rstrip("/")
+        else:
+            self.base_url = (
+                os.environ.get("LLM_BASE_URL")
+                or dotenv.get("base_url")
+                or "https://api.openai.com/v1"
+            ).rstrip("/")
+
+        # api_key
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = (
+                os.environ.get("OPENAI_API_KEY")
+                or dotenv.get("api-key")
+                or dotenv.get("api_key")
+                or ""
+            )
+
+        # model
+        if model is not None:
+            self.model = model
+        else:
+            self.model = (
+                os.environ.get("LLM_MODEL")
+                or dotenv.get("model")
+                or "gpt-4o"
+            )
+
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
@@ -200,8 +262,12 @@ class MinimalLLMAdapter:
 
         message = choice.get("message", {})
 
-        # 提取 text
+        # 提取 text + thinking
         text: Optional[str] = message.get("content")
+        # reasoning_content 用于 DeepSeek/OpenAI o-series 等模型
+        thinking: Optional[str] = message.get(
+            "reasoning_content"
+        ) or message.get("reasoning")
 
         # 提取 tool_uses
         tool_uses: List[_MinimalToolCall] = []
@@ -211,8 +277,11 @@ class MinimalLLMAdapter:
                 try:
                     tool_uses.append(_MinimalToolCall(
                         id=tc["id"],
-                        name=tc["function"]["name"],
-                        arguments=tc["function"]["arguments"],
+                        type=tc.get("type", "function"),
+                        function=_MinimalToolCallFunction(
+                            name=tc["function"]["name"],
+                            arguments=tc["function"]["arguments"],
+                        ),
                     ))
                 except (KeyError, TypeError) as e:
                     logger = __import__("logging").getLogger(__name__)
@@ -231,6 +300,7 @@ class MinimalLLMAdapter:
 
         return _MinimalResponse(
             text=text,
+            thinking=thinking,
             tool_uses=tool_uses,
             stop_reason=stop_reason,
         )
