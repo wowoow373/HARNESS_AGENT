@@ -1,5 +1,7 @@
 # Harness Core — Developer Guide
 
+> **⚠️ 注意：本文档中的代码示例仍使用 `_Minimal*` 类型，已过时。batch-02-1 迁移完成后将统一更新为正式接口类型（`UserRequest`、`Response`、`AssemblyContext` 等）。在此之前，请以 `harness/interfaces/types.py` 中的正式类型定义和 `sdd/02-interfaces.md` 中的接口签名为准。**
+
 > **面向人群**：需要在 Harness 框架上添加模块（batch）的开发者，以及使用 Core 装配自己 Agent 的用户。
 >
 > **阅读前提**：了解 Python 类型标注和依赖注入的基本概念。
@@ -338,7 +340,7 @@ container.register(Sensor, sensor)
 
 ## 5. 数据结构速查
 
-编排器内部使用以下数据结构。它们以 `_Minimal` 前缀命名，batch-02 会被 `harness/interfaces/` 中的正式类型替换。
+编排器内部使用以下数据结构。它们以 `_Minimal` 前缀命名，batch-02-1 会被 `harness/interfaces/` 中的正式类型替换。
 
 ### 5.1 _MinimalUserRequest
 
@@ -833,7 +835,7 @@ A: 如果你注册了 ContextAssembler，编排器用它组装消息。如果没
 
 ### Q: _Minimal 前缀的数据结构什么时候会变？
 
-A: batch-02 会创建 `harness/interfaces/` 目录，把这些 `_Minimal*` 类型替换为正式的接口类型。届时字段名可能会有变化（如 `tool_calls` → 与 SDD 完全对齐），但语义不变。
+A: batch-02 已创建 `harness/interfaces/` 目录，定义了正式的接口类型。batch-02-1 会完成 `_Minimal*` → 正式类型的迁移替换。届时字段名可能会有变化（如 `tool_calls` → 与 SDD 完全对齐），但语义不变。
 
 ### Q: 如何添加自定义的退出条件？
 

@@ -634,7 +634,7 @@ finally:
 
 **操作**：在 `harness/core/types.py` 中定义编排器内部使用的轻量数据结构。
 
-由于 batch-02 才定义正式的大包对象，batch-01 编排器使用**最小化的内部数据结构**来表示各阶段的数据流。这些是临时结构，batch-02 实现后会被正式类型替换。
+由于 batch-02 才定义正式的大包对象，batch-01 编排器使用**最小化的内部数据结构**来表示各阶段的数据流。这些是临时结构，batch-02-1 实现后会被正式类型替换。
 
 ```python
 from dataclasses import dataclass, field
@@ -643,7 +643,7 @@ import json
 
 @dataclass
 class _MinimalUserRequest:
-    """最小化的用户请求表示（batch-02 替换为 interfaces/types.py 中的正式类型）"""
+    """最小化的用户请求表示（batch-02-1 替换为 interfaces/types.py 中的正式类型）"""
     text: str
     metadata: Dict[str, Any] = field(default_factory=dict)
 

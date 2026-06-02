@@ -11,7 +11,7 @@ harness_agent/
 ├── sdd/                          # SDD 规格文件（当前目录）
 ├── harness/                      # 框架源码
 │   ├── core/                     # 内核：DI 容器、生命周期编排、异常、数据类型
-│   ├── interfaces/               # 组件接口类型（占位，后续替换为 Protocol/ABC）
+│   ├── interfaces/               # 组件接口类型（Protocol + 正式大包对象，batch-02 完成）
 │   ├── adapters/                 # 外部系统适配器（LLM API 等）
 │   ├── config/                   # 配置模块（TOML 加载、.env 模板）
 │   ├── messaging/                # 消息构造工具

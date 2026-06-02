@@ -1,7 +1,7 @@
 """Harness Agent Template — 内部数据结构。
 
-batch-01 MVP 的最小化数据类型。后续版本会替换为
-``harness/interfaces/`` 中的正式类型定义。
+batch-01 MVP 的最小化数据类型。batch-02-1 会替换为
+``harness/interfaces/`` 中的正式类型定义。此模块届时标记为废弃。
 """
 
 import json

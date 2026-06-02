@@ -1,45 +1,77 @@
 """Harness Agent Template — 组件接口类型。
 
-batch-01 中的占位类型，仅作为 DI 容器的注册 key 使用。
-后续版本会替换为正式的 Protocol/ABC 定义。
+该模块提供框架的所有公开接口契约和共享数据类型：
+
+- 16 个大包对象（dataclass）：跨组件传递的数据结构
+- 9 个组件接口（Protocol）：组件间解耦的抽象契约
+- 2 个辅助类型 + 1 个类型别名：GuideContext、HookContext、Hook
+
+所有实现组件通过满足这些 Protocol 即可接入框架。
+框架内核（core/）通过此模块的 import 路径获取接口类型作为 DI 容器的注册 key。
+
+模块边界：此包不依赖任何实现模块（core/、adapters/、components/）。
 """
 
+# ── 大包对象（16 个 dataclass） ──────────────────────────────────────────
+from .types import (
+    AssemblyContext,
+    Attachment,
+    EnvState,
+    Example,
+    GuidesBundle,
+    MemoryItem,
+    Message,
+    Response,
+    SystemState,
+    ToolCall,
+    ToolCallFunction,
+    ToolCallRecord,
+    ToolDefinition,
+    ToolResult,
+    Trajectory,
+    UserRequest,
+)
 
-class InputAdapter:
-    """输入输出适配器接口。"""
-    pass
+# ── 组件接口（9 个 Protocol） ────────────────────────────────────────────
+from .input_adapter import InputAdapter
+from .guide_provider import GuideContext, GuideProvider
+from .context_assembler import ContextAssembler
+from .memory_backend import MemoryBackend
+from .sensor import Sensor
+from .tool import Tool
+from .tool_registry import ToolRegistry
+from .mcp_manager import MCPManager
+from .hook import Hook, HookContext
 
-
-class GuideProvider:
-    """前馈指导提供者接口。"""
-    pass
-
-
-class ContextAssembler:
-    """上下文组装器接口。"""
-    pass
-
-
-class MemoryBackend:
-    """记忆后端接口。"""
-    pass
-
-
-class Sensor:
-    """反馈传感器接口。"""
-    pass
-
-
-class ToolRegistry:
-    """工具注册表接口。"""
-    pass
-
-
-class Tool:
-    """工具接口。"""
-    pass
-
-
-class MCPManager:
-    """MCP 管理器接口。"""
-    pass
+__all__ = [
+    # 16 个大包对象
+    "UserRequest",
+    "SystemState",
+    "Attachment",
+    "EnvState",
+    "GuidesBundle",
+    "Example",
+    "AssemblyContext",
+    "Trajectory",
+    "Message",
+    "Response",
+    "ToolCall",
+    "ToolCallFunction",
+    "ToolDefinition",
+    "ToolCallRecord",
+    "ToolResult",
+    "MemoryItem",
+    # 9 个组件接口（8 个 Protocol + 1 个函数类型别名）
+    "InputAdapter",
+    "GuideProvider",
+    "ContextAssembler",
+    "MemoryBackend",
+    "Sensor",
+    "Tool",
+    "ToolRegistry",
+    "MCPManager",
+    "Hook",
+    # 辅助类型（GuideProvider 的上下文 + Hook 的上下文）
+    "GuideContext",
+    "HookContext",
+]

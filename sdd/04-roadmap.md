@@ -10,12 +10,13 @@
 |---|---------|-----------|------|---------|
 | 01 | mvp | DI 容器 + 生命周期编排 + 配置加载 + LLM 适配器 + 组件接口占位 | 无 | `harness/core/*`, `harness/interfaces/*`, `harness/adapters/*`, `harness/config/*`, `harness/messaging/*`, `harness/di.py` |
 | 02 | interfaces | 所有组件的抽象接口 + 大包对象定义 | 01 | `harness/interfaces/*` |
-| 03 | memory-backend | MemoryBackend 接口 + JsonlMemory 实现 | 02 | `harness/components/memory_backend/` |
-| 04 | guide-provider | GuideProvider 接口 + FileGuideProvider 实现 | 02 | `harness/components/guide_provider/` |
-| 05 | context-assembler | ContextAssembler 接口 + SimpleAssembler 实现 | 02, 03, 04 | `harness/components/context_assembler/` |
-| 06 | tool-mcp-manager | Tool 抽象 + ToolRegistry + MCPManager + 系统基础 Tool | 02 | `harness/components/tool/`, `harness/components/mcp_manager/` |
-| 07 | sensor | Sensor 接口 + LoggingSensor 实现 | 02, 03 | `harness/components/sensor/` |
-| 08 | input-adapter | InputAdapter 接口 + CliAdapter 实现 | 02 | `harness/components/input_adapter/` |
+| 02-1 | interface-tests | 将 core/ 迁移为正式接口类型 + 全量接口测试 | 02 | 更新 `harness/core/*`, `harness/adapters/*`, `harness/messaging/*`; 新增 `tests/test_interfaces_*.py` |
+| 03 | memory-backend | MemoryBackend 接口 + JsonlMemory 实现 | 02-1 | `harness/components/memory_backend/` |
+| 04 | guide-provider | GuideProvider 接口 + FileGuideProvider 实现 | 02-1 | `harness/components/guide_provider/` |
+| 05 | context-assembler | ContextAssembler 接口 + SimpleAssembler 实现 | 02-1, 03, 04 | `harness/components/context_assembler/` |
+| 06 | tool-mcp-manager | Tool 抽象 + ToolRegistry + MCPManager + 系统基础 Tool | 02-1 | `harness/components/tool/`, `harness/components/mcp_manager/` |
+| 07 | sensor | Sensor 接口 + LoggingSensor 实现 | 02-1, 03 | `harness/components/sensor/` |
+| 08 | input-adapter | InputAdapter 接口 + CliAdapter 实现 | 02-1 | `harness/components/input_adapter/` |
 | 09 | hooks | Hook 系统（注册、链式调用、所有 Hook 点） | 01 | `harness/hooks/*` |
 | 10 | di-assembly | 端到端装配 + 集成测试 + 最少示例 | 01-09 | `main.py`, 集成测试, profiles/coding-assistant/ |
 
@@ -30,14 +31,16 @@
     ↓
 02-interfaces      ← 依赖 01（DI 容器基础设施，用于接口注册）
     ↓
-    ├── 03-memory-backend     ← 依赖 02（MemoryBackend 接口、MemoryItem 类型）
-    ├── 04-guide-provider     ← 依赖 02（GuideProvider 接口、GuidesBundle 等类型）
-    ├── 06-tool-mcp-manager   ← 依赖 02（Tool/ToolRegistry/MCPManager 接口）
-    ├── 07-sensor             ← 依赖 02（Sensor 接口、Trajectory 类型）
+02-1-interface-tests ← 依赖 02（将 _Minimal* 迁移为正式类型，使后续批次面向最终类型开发）
+    ↓
+    ├── 03-memory-backend     ← 依赖 02-1（MemoryBackend 接口、MemoryItem 类型）
+    ├── 04-guide-provider     ← 依赖 02-1（GuideProvider 接口、GuidesBundle 等类型）
+    ├── 06-tool-mcp-manager   ← 依赖 02-1（Tool/ToolRegistry/MCPManager 接口）
+    ├── 07-sensor             ← 依赖 02-1（Sensor 接口、Trajectory 类型）
     │                            + 依赖 03（MemoryBackend 实例用于写入）
-    ├── 08-input-adapter      ← 依赖 02（InputAdapter 接口、UserRequest 类型）
+    ├── 08-input-adapter      ← 依赖 02-1（InputAdapter 接口、UserRequest 类型）
     │
-    └── 05-context-assembler  ← 依赖 02（ContextAssembler 接口）
+    └── 05-context-assembler  ← 依赖 02-1（ContextAssembler 接口）
                                 + 依赖 03（从 MemoryBackend 读取实例）
                                 + 依赖 04（需要使用 GuidesBundle 类型）
 
@@ -79,7 +82,25 @@
 
 **不在范围：**
 - 任何实现类
-- 测试（接口是纯定义，batch-03 起测试跟着实现走）
+- 测试（接口是纯定义，batch-02-1 完成迁移和测试）
+
+---
+
+### 02-1 — interface-tests（接口测试 + 类型统一）
+
+**范围：**
+- 将 `harness/core/orchestrator.py` 中的 `_Minimal*` 类型替换为正式接口类型
+- 将 `harness/adapters/llm_adapter.py` 返回值类型升级为正式 `Response`
+- 将 `harness/messaging/builder.py` 参数类型升级为正式类型
+- 删除 `_normalize_*` 桥接方法（不再需要）
+- 标记 `harness/core/types.py` 的 `_Minimal*` 类型为废弃
+- 全量接口测试：正式 dataclass 类型测试 + Protocol conformance 测试 + 端到端集成测试
+- 更新所有现有测试以使用正式类型
+
+**不在范围：**
+- 不修改 `harness/interfaces/` 中的接口定义
+- 不新增任何组件实现
+- 不修改 DI 容器和配置加载器
 
 ---
 
@@ -87,7 +108,7 @@
 
 **范围：**
 - `JsonlMemory` 实现（追加式 JSONL + 启动时构建内存索引）
-- 接口定义移到 `harness/interfaces/memory_backend.py`（若 batch-02 已定义则直接使用）
+- 接口定义移到 `harness/interfaces/memory_backend.py`（若 batch-02-1 已就绪则直接使用）
 - `read()`、`write()`、`search()`、`list_namespaces()` 完整实现
 - `search()` 至少支持简单的文本匹配（关键词/子串）
 - 单元测试
@@ -113,7 +134,7 @@
 - 滑动窗口：超过阈值时丢弃最旧的 message
 - 单元测试
 
-**前置条件：** 依赖 03（MemoryBackend 数据类型）和 04（GuidesBundle 数据类型）的实现已就绪。
+**前置条件：** 依赖 02-1、03（MemoryBackend 数据类型）和 04（GuidesBundle 数据类型）的实现已就绪。
 
 ---
 
@@ -164,6 +185,8 @@
 - 端到端集成测试：从 InputAdapter 进、LLM 调用（可用 mock）、到 Sensor 写出
 - `coding-assistant` 模板最小骨架
 - 全局验收标准验证（对照 `06-acceptance.md`）
+
+**注意**：`_Minimal*` → 正式类型的迁移已在 batch-02-1 完成，batch-10 不再涉及类型替换。
 
 ---
 

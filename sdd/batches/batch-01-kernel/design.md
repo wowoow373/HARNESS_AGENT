@@ -575,7 +575,7 @@ class OrchestratorError(HarnessError):
 - 零外部依赖：仅使用 Python 标准库 `urllib.request`
 - 支持任何 OpenAI 兼容 endpoint（OpenAI、Ollama、vLLM、LM Studio 等）
 
-**与组件的关系**：`MinimalLLMAdapter` 不是框架组件（不属于 `components/`），它是 MVP 自带的参考实现。用户可以直接用它，也可以用自己的 `call_llm` 替换它。它在 batch-10 时会被正式的 LLM 组件替代，但 batch-01 ~ 09 期间它就是"能跑起来"的关键。
+**与组件的关系**：`MinimalLLMAdapter` 不是框架组件（不属于 `components/`），它是 MVP 自带的参考实现。用户可以直接用它，也可以用自己的 `call_llm` 替换它。它会在后续被正式的 LLM 组件替代（batch-02-1 先将其返回值类型迁移为正式 `Response`），但在此之前它就是"能跑起来"的关键。
 
 ### 6.2 接口设计
 
@@ -928,8 +928,8 @@ batch-01 为后续批次提供以下基础设施：
 | 基础设施 | 被哪些批次使用 | 使用方式 |
 |----------|--------------|---------|
 | `DIContainer` | 全部批次 | 注册组件实例，解析依赖 |
-| `LifecycleOrchestrator` | batch-10 | 驱动完整生命周期 |
+| `LifecycleOrchestrator` | batch-02-1, batch-10 | batch-02-1 迁移为正式类型；batch-10 完成 CLI 装配 |
 | `ConfigLoader` / `ProfileConfig` | batch-10 | 加载 profile.toml |
-| `HarnessError` 异常体系 | batch-02 ~ 10 | 所有组件和测试的异常基类 |
-| `MinimalLLMAdapter` | batch-03 ~ 09 | 在正式 LLM 组件就绪前提供真实 LLM 调用能力 |
+| `HarnessError` 异常体系 | batch-02-1 ~ 10 | 所有组件和测试的异常基类 |
+| `MinimalLLMAdapter` | batch-02-1 ~ 09 | batch-02-1 升级返回类型为正式 `Response`；在正式 LLM 组件就绪前提供真实 LLM 调用能力 |
 | `harness/di.py` → `Harness` | batch-10 | 框架顶层入口 |
