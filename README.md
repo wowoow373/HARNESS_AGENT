@@ -11,24 +11,17 @@
 - **微内核架构** — 框架内核极度精简，仅负责生命周期编排、Hook 拦截与依赖注入
 - **插件化扩展** — 记忆、工具、传感器等所有业务逻辑都是可替换的插件
 - **三阶段生命周期** — 会话初始化 → 多轮对话循环 → 会话结束，控制流清晰固定
-- **零依赖 LLM 适配器** — 内置 OpenAI 兼容客户端，自动从 `.env` / 环境变量读取配置
+- **零依赖 LLM 适配器** — 内置 OpenAI 兼容 HTTP 客户端，自动从 `.env` / 环境变量读取配置
 - **Duck Typing 组件** — 不强制继承基类，有对应方法就能工作
-- **完整的类型与异常体系** — 开发时类型安全，运行时异常可追踪
+- **完整的类型与异常体系** — 16 个正式 dataclass + 8 个 Protocol + Hook 类型别名 + 完善的异常层次
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 克隆并进入项目
+### 1. 配置 LLM
 
-```bash
-git clone <repo-url> harness_agent
-cd harness_agent
-```
-
-### 2. 配置 LLM（可选）
-
-在项目根目录创建 `.env`：
+在 `harness/config/.env` 中配置 API 信息：
 
 ```ini
 base_url = https://api.openai.com/v1
@@ -41,9 +34,10 @@ model = gpt-4o
 ```bash
 export OPENAI_API_KEY="sk-your-key-here"
 export LLM_MODEL="gpt-4o"
+export LLM_BASE_URL="https://api.openai.com/v1"
 ```
 
-### 3. 运行最小示例
+### 2. 运行最小示例
 
 ```bash
 python examples/hello_agent.py
@@ -51,21 +45,20 @@ python examples/hello_agent.py
 
 输入任意内容即可与 Agent 对话，输入 `/exit` 退出。
 
-### 4. 编写你的第一个 Agent
+### 3. 编写你的第一个 Agent
 
 ```python
 from harness.di import Harness
 from harness.core.container import DIContainer
-from harness.core.orchestrator import InputAdapter, _MinimalUserRequest, _MinimalResponse
+from harness.core.orchestrator import InputAdapter
+from harness.interfaces.types import UserRequest
 from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 1. 实现输入适配器
 class CliAdapter:
     def receive(self):
         text = input("> ")
-        if text.strip() in ("/exit", "exit"):
-            return None
-        return _MinimalUserRequest(text=text)
+        return UserRequest(text=text)
 
     def send(self, response):
         print(f"\n🤖 {response.text}\n")
@@ -87,38 +80,57 @@ Harness.from_container(container, call_llm=llm).run()
 
 ```
 harness_agent/
-├── harness/                    # 框架核心
-│   ├── __init__.py             # 导出 Harness 入口类
-│   ├── di.py                   # 装配入口（from_container + run）
-│   ├── core/                   # 内核：DI 容器 + 编排器 + 异常 + 类型
-│   │   ├── container.py        # DIContainer（注册/解析/查询）
-│   │   ├── orchestrator.py     # LifecycleOrchestrator（三阶段编排）
-│   │   ├── types.py            # 内部数据结构
-│   │   ├── exceptions.py       # 异常体系
-│   │   └── config.py           # 配置模型
-│   ├── adapters/               # 外部系统适配器
-│   │   └── llm_adapter.py      # MinimalLLMAdapter（OpenAI 兼容）
-│   ├── config/                 # 配置模块
-│   │   └── loader.py           # ConfigLoader + ProfileConfig
-│   ├── interfaces/             # 组件接口类型（占位，batch-02 完善）
-│   └── messaging/              # 消息构造
-│       └── builder.py          # assistant / tool_result 消息构造
-├── tests/                      # 测试套件
-├── examples/                   # 示例代码
-│   └── hello_agent.py          # 最小可运行 Agent
-├── sdd/                        # 软件设计文档
-│   ├── 01-architecture.md      # 架构总览
-│   ├── 02-interfaces.md        # 接口设计
-│   ├── 03-project-structure.md # 项目结构
-│   ├── 04-roadmap.md           # 路线图
-│   ├── 05-conventions.md       # 编码约定
-│   ├── 06-acceptance.md        # 验收标准
-│   └── batches/                # 分批实现计划
-│       ├── batch-01-kernel/    # 内核实现（已完成）
-│       ├── batch-02-interfaces/# 正式接口定义
-│       └── ...
-├── ARCHITECTURE.md             # 完整架构设计文档
-└── CORE_DEVELOPER_GUIDE.md     # 核心开发者指南
+├── harness/                          # 框架核心
+│   ├── __init__.py                   # 导出 Harness 入口类
+│   ├── di.py                         # 装配入口（from_container + run）
+│   ├── core/                         # 内核
+│   │   ├── container.py              # DIContainer（注册/解析/查询）
+│   │   ├── orchestrator.py           # LifecycleOrchestrator（三阶段编排）
+│   │   ├── types.py                  # ⚠️ DEPRECATED — 旧类型定义，已废弃
+│   │   ├── exceptions.py             # 异常体系
+│   │   ├── config.py                 # 配置模型
+│   │   └── llm_adapter.py            # re-export 包装（指向 adapters/）
+│   ├── interfaces/                   # 接口与类型定义（正式来源）
+│   │   ├── __init__.py               # 导出 16 类型 + 9 接口
+│   │   ├── types.py                  # 16 个正式 dataclass
+│   │   ├── input_adapter.py          # InputAdapter Protocol
+│   │   ├── guide_provider.py         # GuideProvider Protocol
+│   │   ├── context_assembler.py      # ContextAssembler Protocol
+│   │   ├── memory_backend.py         # MemoryBackend Protocol
+│   │   ├── sensor.py                 # Sensor Protocol
+│   │   ├── tool.py                   # Tool Protocol
+│   │   ├── tool_registry.py          # ToolRegistry Protocol
+│   │   ├── mcp_manager.py            # MCPManager Protocol
+│   │   └── hook.py                   # Hook 类型别名 + HookContext
+│   ├── adapters/                     # 外部系统适配器
+│   │   └── llm_adapter.py            # MinimalLLMAdapter（OpenAI 兼容）
+│   ├── config/                       # 配置模块
+│   │   ├── loader.py                 # ConfigLoader + ProfileConfig
+│   │   └── .env                      # API 配置
+│   └── messaging/                    # 消息格式转换
+│       ├── __init__.py               # 导出转换函数
+│       └── builder.py                # Message↔dict + ToolDefinition→OpenAI
+├── tests/                            # 测试套件
+│   ├── test_container.py             # DI 容器测试
+│   ├── test_config.py                # 配置加载器测试
+│   ├── test_exceptions.py            # 异常体系测试
+│   ├── test_orchestrator.py          # 编排器测试
+│   ├── test_llm_adapter.py           # LLM 适配器测试
+│   ├── test_messaging.py             # 消息转换层测试
+│   ├── test_black_box.py             # 黑盒集成测试（含真实 API）
+│   └── test_real_llm_trace.py        # 真实 LLM 端到端 trace
+├── examples/                         # 示例代码
+│   └── hello_agent.py                # 最小可运行 Agent
+├── sdd/                              # 软件设计文档
+│   ├── 01-architecture.md            # 架构总览
+│   ├── 02-interfaces.md              # 接口设计
+│   ├── 03-project-structure.md       # 项目结构
+│   ├── 04-roadmap.md                 # 路线图
+│   ├── 05-conventions.md             # 编码约定
+│   ├── 06-acceptance.md              # 验收标准
+│   └── batches/                      # 分批实现计划
+├── ARCHITECTURE.md                   # 完整架构设计文档
+└── CORE_DEVELOPER_GUIDE.md           # 核心开发者指南
 ```
 
 ---
@@ -164,13 +176,14 @@ harness_agent/
 ## 🧪 运行测试
 
 ```bash
-# 运行所有单元测试（跳过需要真实 API Key 的测试）
+# 运行所有测试（跳过需要真实 API Key 的测试）
 pytest tests/ --ignore=tests/test_real_llm_trace.py -v
 
 # 运行单个测试文件
 pytest tests/test_orchestrator.py -v
 pytest tests/test_container.py -v
 pytest tests/test_config.py -v
+pytest tests/test_messaging.py -v
 
 # 真实 LLM 集成测试（需要配置 API Key）
 python tests/test_real_llm_trace.py
@@ -185,25 +198,21 @@ python tests/test_real_llm_trace.py
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 完整架构设计：范式、组件、接口契约、数据流、配置与装配 |
 | [CORE_DEVELOPER_GUIDE.md](CORE_DEVELOPER_GUIDE.md) | 开发者指南：快速开始、组件实现、数据结构速查、测试指南、FAQ |
 | [sdd/01-architecture.md](sdd/01-architecture.md) | SDD 架构总览 |
+| [sdd/02-interfaces.md](sdd/02-interfaces.md) | 正式接口与类型定义 |
 | [sdd/04-roadmap.md](sdd/04-roadmap.md) | 项目路线图与分批计划 |
 
 ---
 
 ## 🛣️ 路线图
 
-当前处于 **Batch-01（内核 MVP）** 阶段，已实现：
+当前已完成的批次：
 
-- ✅ DI 容器（注册、解析、查询）
-- ✅ 生命周期编排器（三阶段控制流）
-- ✅ 配置加载器（TOML 解析与校验）
-- ✅ LLM 适配器（零依赖 OpenAI 兼容客户端）
-- ✅ 异常体系
-- ✅ 消息构造工具
-- ✅ 完整测试覆盖
+- ✅ **Batch-01**：内核 MVP（DI 容器、三阶段编排器、配置加载器、LLM 适配器、异常体系、消息构造）
+- ✅ **Batch-02**：正式接口定义（16 个 dataclass + 8 个 Protocol + 1 个 Hook 别名）
+- ✅ **Batch-02-1**：类型迁移（`_Minimal*` → 正式类型，删除桥接方法，补齐测试覆盖）
 
 即将实现：
 
-- 🔄 Batch-02：正式接口定义（Protocol / ABC）
 - ⏳ Batch-03：MemoryBackend 默认实现
 - ⏳ Batch-04：GuideProvider 默认实现
 - ⏳ Batch-05：ContextAssembler 默认实现

@@ -22,7 +22,7 @@ import pytest
 
 def _read_dotenv():
     """Read config from harness/config/.env file."""
-    env_path = Path(__file__).parent.parent / "harness" / "core" / ".env"
+    env_path = Path(__file__).parent.parent / "harness" / "config" / ".env"
     config = {}
     if env_path.exists():
         with open(env_path) as f:
@@ -390,16 +390,16 @@ class TestMinimalLLMAdapterRealAPI:
         assert response.stop_reason == "end_turn"
 
     def test_correct_response_type(self, env_config):
-        """Response should be _MinimalResponse with correct field types."""
+        """Response should be Response with correct field types."""
         from harness.core.llm_adapter import MinimalLLMAdapter
-        from harness.core.orchestrator import _MinimalResponse
+        from harness.interfaces.types import Response
         adapter = MinimalLLMAdapter(
             base_url=env_config.get("base_url", "https://api.deepseek.com"),
             api_key=env_config.get("api-key"),
             model=env_config.get("model", "deepseek-v4-flash"),
         )
         response = adapter([{"role": "user", "content": "Hi!"}])
-        assert isinstance(response, _MinimalResponse)
+        assert isinstance(response, Response)
         assert isinstance(response.text, str)
         assert isinstance(response.stop_reason, str)
         assert isinstance(response.tool_uses, list)
@@ -486,7 +486,7 @@ class TestMinimalLLMAdapterRealAPI:
                 assert tc.type == "function"
                 assert tc.function.name is not None
                 assert tc.function.arguments is not None
-                args = tc.parse_arguments()
+                args = json.loads(tc.function.arguments)
                 assert isinstance(args, dict)
 
     def test_multi_turn_conversation(self, env_config):
@@ -624,19 +624,19 @@ class TestMinimalLLMAdapterConstruction:
         assert "model" in content
 
     def test_custom_callable_as_llm(self):
-        """Any callable matching (messages, tools=None) → _MinimalResponse works (§7.2)."""
-        from harness.core.orchestrator import _MinimalResponse
+        """Any callable matching (messages, tools=None) → Response works (§7.2)."""
+        from harness.interfaces.types import Response
 
         def my_llm(messages, tools=None):
-            return _MinimalResponse(text="custom", stop_reason="end_turn")
+            return Response(text="custom", stop_reason="end_turn")
 
         result = my_llm([{"role": "user", "content": "hi"}])
-        assert isinstance(result, _MinimalResponse)
+        assert isinstance(result, Response)
         assert result.text == "custom"
 
         # With tools
         result2 = my_llm([{"role": "user", "content": "hi"}], tools=[])
-        assert isinstance(result2, _MinimalResponse)
+        assert isinstance(result2, Response)
 
 
 # ============================================================================
@@ -649,64 +649,64 @@ class TestDataStructures:
     """Verify data structures match documented fields (§5)."""
 
     def test_user_request_fields(self):
-        from harness.core.orchestrator import _MinimalUserRequest
-        # With values — text is required per current implementation
-        req = _MinimalUserRequest(text="hello", metadata={"exit": True})
+        from harness.interfaces.types import UserRequest
+        # With values
+        req = UserRequest(text="hello", metadata={"exit": True})
         assert req.text == "hello"
         assert isinstance(req.metadata, dict)
         assert req.metadata.get("exit") == True
         # With just text (metadata defaults to empty dict)
-        req2 = _MinimalUserRequest(text=None)
-        assert req2.text is None
+        req2 = UserRequest(text="")
+        assert req2.text == ""
         assert isinstance(req2.metadata, dict)
 
     def test_response_fields_and_defaults(self):
-        from harness.core.orchestrator import _MinimalResponse
-        resp = _MinimalResponse(text="Hello", thinking="reasoning...", stop_reason="end_turn")
+        from harness.interfaces.types import Response
+        resp = Response(text="Hello", thinking="reasoning...", stop_reason="end_turn")
         assert resp.text == "Hello"
         assert resp.thinking == "reasoning..."
         assert resp.stop_reason == "end_turn"
         assert isinstance(resp.tool_uses, list)
         # Defaults
-        resp2 = _MinimalResponse()
+        resp2 = Response()
         assert resp2.text is None
         assert resp2.thinking is None
         assert resp2.tool_uses == []
         assert resp2.stop_reason == "end_turn"
 
-    def test_tool_call_fields_and_parse(self):
-        from harness.core.orchestrator import _MinimalToolCall, _MinimalToolCallFunction
-        func = _MinimalToolCallFunction(name="get_weather", arguments='{"city":"Beijing"}')
-        tc = _MinimalToolCall(id="call_123", type="function", function=func)
+    def test_tool_call_fields(self):
+        from harness.interfaces.types import ToolCall, ToolCallFunction
+        func = ToolCallFunction(name="get_weather", arguments='{"city":"Beijing"}')
+        tc = ToolCall(id="call_123", type="function", function=func)
         assert tc.id == "call_123"
         assert tc.type == "function"
         assert tc.function.name == "get_weather"
         assert tc.function.arguments == '{"city":"Beijing"}'
-        assert tc.parse_arguments() == {"city": "Beijing"}
+        assert json.loads(tc.function.arguments) == {"city": "Beijing"}
 
     def test_tool_call_defaults(self):
-        from harness.core.orchestrator import _MinimalToolCall
-        tc = _MinimalToolCall(id="id1")
+        from harness.interfaces.types import ToolCall
+        tc = ToolCall(id="id1")
         assert tc.type == "function"
         assert tc.function.name == ""
         assert tc.function.arguments == "{}"
 
     def test_guides_bundle_fields_and_defaults(self):
-        from harness.core.orchestrator import _MinimalGuidesBundle
-        gb = _MinimalGuidesBundle(
+        from harness.interfaces.types import GuidesBundle, Example
+        gb = GuidesBundle(
             identity="You are helpful",
             capabilities=["coding"],
             rules=["Be polite"],
             constraints=["No harm"],
-            examples=[{"input": "hi", "output": "hello"}],
+            examples=[Example(input="hi", output="hello")],
         )
         assert gb.identity == "You are helpful"
         assert gb.capabilities == ["coding"]
         assert gb.rules == ["Be polite"]
         assert gb.constraints == ["No harm"]
-        assert gb.examples == [{"input": "hi", "output": "hello"}]
+        assert gb.examples == [Example(input="hi", output="hello")]
         # Defaults
-        gb2 = _MinimalGuidesBundle()
+        gb2 = GuidesBundle()
         assert gb2.identity == ""
         assert gb2.capabilities == []
         assert gb2.rules == []
@@ -714,25 +714,25 @@ class TestDataStructures:
         assert gb2.examples == []
 
     def test_assembly_context_fields(self):
-        from harness.core.orchestrator import _MinimalAssemblyContext
-        ctx = _MinimalAssemblyContext()
+        from harness.interfaces.types import AssemblyContext
+        ctx = AssemblyContext()
         assert ctx.user_request is None
         assert ctx.guides is None
         assert isinstance(ctx.available_tools, list)
         assert isinstance(ctx.history, list)
         assert isinstance(ctx.memories, list)
-        assert isinstance(ctx.system_state, dict)
+        assert hasattr(ctx.system_state, "phase")
         assert isinstance(ctx.metadata, dict)
 
     def test_trajectory_fields(self):
-        from harness.core.orchestrator import _MinimalTrajectory
-        traj = _MinimalTrajectory()
+        from harness.interfaces.types import Trajectory
+        traj = Trajectory()
         assert traj.user_request is None
         assert isinstance(traj.history, list)
         assert isinstance(traj.tool_calls, list)
         assert traj.final_output == ""
         assert traj.execution_time == 0.0
-        assert isinstance(traj.system_state, dict)
+        assert hasattr(traj.system_state, "phase")
         assert isinstance(traj.metadata, dict)
 
 
@@ -758,13 +758,14 @@ class TestHarnessAssembly:
         """Registration of InputAdapter → success."""
         from harness.di import Harness
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text=None)
+                return UserRequest(text="")
             def send(self, response):
                 pass
 
@@ -777,12 +778,13 @@ class TestHarnessAssembly:
         """call_llm=None → debug mode, run should not crash (§3.3)."""
         from harness.di import Harness
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         container = DIContainer()
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text=None)
+                return UserRequest(text="")
             def send(self, response):
                 pass
 
@@ -794,7 +796,8 @@ class TestHarnessAssembly:
         """One input → one output via LLM."""
         from harness.di import Harness
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
         outputs = []
@@ -804,8 +807,8 @@ class TestHarnessAssembly:
             def receive(self):
                 call_count[0] += 1
                 if call_count[0] == 1:
-                    return _MinimalUserRequest(text="Say 'PONG' only.")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="Say 'PONG' only.")
+                return UserRequest(text="")
             def send(self, response):
                 outputs.append(response.text)
 
@@ -826,14 +829,13 @@ class TestExitSignals:
     outer-loop iteration. These tests verify the actual behavior.
     """
 
-    def _run_with_input(self, text=None, metadata=None, exit_meta=False):
+    def _run_with_input(self, text="", metadata=None, exit_meta=False):
         """Helper: run harness with given first input + exit on second receive.
         Returns (outputs, receive_count)."""
         from harness.di import Harness
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import (
-            InputAdapter, _MinimalUserRequest, _MinimalResponse,
-        )
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest, Response
         container = DIContainer()
         outputs = []
         calls = [0]
@@ -846,8 +848,8 @@ class TestExitSignals:
             def receive(self):
                 calls[0] += 1
                 if calls[0] == 1:
-                    return _MinimalUserRequest(text=text, metadata=meta)
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text=text, metadata=meta)
+                return UserRequest(text="")
 
             def send(self, response):
                 outputs.append(response.text)
@@ -855,17 +857,11 @@ class TestExitSignals:
         container.register(InputAdapter, TestAdapter())
 
         def mock_llm(messages, tools=None):
-            return _MinimalResponse(text="mock reply", stop_reason="end_turn")
+            return Response(text="mock reply", stop_reason="end_turn")
 
         harness = Harness.from_container(container, call_llm=mock_llm)
         harness.run()
         return outputs, calls[0]
-
-    def test_none_text_causes_exit_after_first_receive(self):
-        """text=None on first receive → immediate exit, no LLM call."""
-        outputs, calls = self._run_with_input(text=None)
-        # Phase init checks exit after first receive, skips LLM entirely
-        assert calls >= 1
 
     def test_empty_text_causes_exit_after_first_receive(self):
         """text='' on first receive → immediate exit, no LLM call."""
@@ -877,28 +873,13 @@ class TestExitSignals:
         outputs, calls = self._run_with_input(text="   ")
         assert calls >= 1
 
-    @pytest.mark.xfail(reason="Doc §4.1: /exit command exit not yet implemented")
     def test_exit_command_should_exit(self):
-        """Doc states /exit should trigger exit. Currently not implemented."""
+        """Doc states /exit should trigger exit."""
         outputs, calls = self._run_with_input(text="/exit")
         assert len(outputs) == 0
 
-    @pytest.mark.xfail(reason="Doc §4.1: /quit command exit not yet implemented")
-    def test_quit_command_should_exit(self):
-        """Doc states /quit should trigger exit. Currently not implemented."""
-        outputs, calls = self._run_with_input(text="/quit")
-        assert len(outputs) == 0
-
-    @pytest.mark.xfail(reason="Doc §4.1: /bye command exit not yet implemented")
-    def test_bye_command_should_exit(self):
-        """Doc states /bye should trigger exit. Currently not implemented."""
-        outputs, calls = self._run_with_input(text="/bye")
-        assert len(outputs) == 0
-
-    @pytest.mark.xfail(reason="Doc §4.1: metadata exit signal not yet implemented")
     def test_metadata_exit_true_should_exit(self):
-        """Doc states metadata={'exit': True} should trigger exit.
-        Currently not implemented."""
+        """Doc states metadata={'exit': True} should trigger exit."""
         outputs, calls = self._run_with_input(text="hello", exit_meta=True)
         assert len(outputs) == 0
 
@@ -924,12 +905,13 @@ class TestComponentOptionality:
     @pytest.fixture
     def base_container(self):
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         container = DIContainer()
 
         class ExitAdapter:
             def receive(self):
-                return _MinimalUserRequest(text=None)
+                return UserRequest(text="")
             def send(self, response):
                 pass
 
@@ -937,9 +919,9 @@ class TestComponentOptionality:
         return container
 
     def _make_mock_llm(self):
-        from harness.core.orchestrator import _MinimalResponse
+        from harness.interfaces.types import Response
         def mock_llm(messages, tools=None):
-            return _MinimalResponse(text="mock", stop_reason="end_turn")
+            return Response(text="mock", stop_reason="end_turn")
         return mock_llm
 
     def _run(self, container):
@@ -978,7 +960,8 @@ class TestComponentOptionalityWithNormalInput:
     @pytest.fixture
     def container(self):
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         c = DIContainer()
         calls = [0]
 
@@ -986,8 +969,8 @@ class TestComponentOptionalityWithNormalInput:
             def receive(self):
                 calls[0] += 1
                 if calls[0] == 1:
-                    return _MinimalUserRequest(text="hello")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="hello")
+                return UserRequest(text="")
             def send(self, r):
                 pass
 
@@ -996,10 +979,10 @@ class TestComponentOptionalityWithNormalInput:
 
     def _run_with_mock(self, container):
         from harness.di import Harness
-        from harness.core.orchestrator import _MinimalResponse
+        from harness.interfaces.types import Response
 
         def mock_llm(messages, tools=None):
-            return _MinimalResponse(text="mock reply", stop_reason="end_turn")
+            return Response(text="mock reply", stop_reason="end_turn")
 
         harness = Harness.from_container(container, call_llm=mock_llm)
         harness.run()
@@ -1025,7 +1008,8 @@ class TestFullIntegrationRealLLM:
         """Complete lifecycle: user input → LLM → text response."""
         from harness.di import Harness
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
         outputs = []
@@ -1035,8 +1019,8 @@ class TestFullIntegrationRealLLM:
             def receive(self):
                 count[0] += 1
                 if count[0] == 1:
-                    return _MinimalUserRequest(text="Say exactly 'PONG' and nothing else.")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="Say exactly 'PONG' and nothing else.")
+                return UserRequest(text="")
             def send(self, r):
                 outputs.append(r.text)
 
@@ -1055,7 +1039,9 @@ class TestFullIntegrationRealLLM:
         from harness.core.container import DIContainer
         from harness.core.orchestrator import (
             InputAdapter, GuideProvider,
-            _MinimalUserRequest, _MinimalGuidesBundle, _MinimalAssemblyContext,
+        )
+        from harness.interfaces.types import (
+            UserRequest, GuidesBundle, AssemblyContext,
         )
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
@@ -1066,14 +1052,14 @@ class TestFullIntegrationRealLLM:
             def receive(self):
                 count[0] += 1
                 if count[0] == 1:
-                    return _MinimalUserRequest(text="What is your role? Answer in one sentence.")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="What is your role? Answer in one sentence.")
+                return UserRequest(text="")
             def send(self, r):
                 outputs.append(r.text)
 
         class G:
-            def get_guides(self, ctx: _MinimalAssemblyContext):
-                return _MinimalGuidesBundle(
+            def get_guides(self, ctx):
+                return GuidesBundle(
                     identity="You are a PIRATE named Captain Blackbeard. Always respond like a pirate.",
                 )
 
@@ -1096,8 +1082,8 @@ class TestFullIntegrationRealLLM:
         from harness.core.container import DIContainer
         from harness.core.orchestrator import (
             InputAdapter, Sensor,
-            _MinimalUserRequest, _MinimalTrajectory,
         )
+        from harness.interfaces.types import UserRequest, Trajectory
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
         outputs = []
@@ -1108,13 +1094,13 @@ class TestFullIntegrationRealLLM:
             def receive(self):
                 count[0] += 1
                 if count[0] == 1:
-                    return _MinimalUserRequest(text="Say 'hello' and nothing else.")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="Say 'hello' and nothing else.")
+                return UserRequest(text="")
             def send(self, r):
                 outputs.append(r.text)
 
         class S:
-            def sense(self, trajectory: _MinimalTrajectory):
+            def sense(self, trajectory):
                 sensor_data.append({
                     "final_output": trajectory.final_output,
                     "history_len": len(trajectory.history),
@@ -1145,8 +1131,8 @@ class TestFullIntegrationRealLLM:
         from harness.core.container import DIContainer
         from harness.core.orchestrator import (
             InputAdapter, ContextAssembler,
-            _MinimalUserRequest, _MinimalAssemblyContext,
         )
+        from harness.interfaces.types import UserRequest, AssemblyContext
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
         outputs = []
@@ -1156,21 +1142,28 @@ class TestFullIntegrationRealLLM:
             def receive(self):
                 count[0] += 1
                 if count[0] == 1:
-                    return _MinimalUserRequest(text="My name is Alice. Just say OK.")
+                    return UserRequest(text="My name is Alice. Just say OK.")
                 elif count[0] == 2:
-                    return _MinimalUserRequest(text="What is my name? Answer in one short sentence.")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="What is my name? Answer in one short sentence.")
+                return UserRequest(text="")
             def send(self, r):
                 outputs.append(r.text)
 
         class SimpleAssembler:
             """Assembler that includes history for multi-turn support."""
-            def assemble(self, ctx: _MinimalAssemblyContext):
+            def assemble(self, ctx):
                 messages = []
                 if ctx.guides and ctx.guides.identity:
                     messages.append({"role": "system", "content": ctx.guides.identity})
                 for msg in ctx.history:
-                    messages.append(msg)
+                    from harness.interfaces.types import Message as Msg
+                    if isinstance(msg, Msg):
+                        d = {"role": msg.role, "content": msg.content}
+                        if msg.tool_call_id:
+                            d["tool_call_id"] = msg.tool_call_id
+                        messages.append(d)
+                    else:
+                        messages.append(msg)
                 if ctx.user_request and ctx.user_request.text:
                     messages.append({"role": "user", "content": ctx.user_request.text})
                 return messages
@@ -1192,7 +1185,8 @@ class TestFullIntegrationRealLLM:
         """Without custom ContextAssembler, fallback still produces valid messages."""
         from harness.di import Harness
         from harness.core.container import DIContainer
-        from harness.core.orchestrator import InputAdapter, _MinimalUserRequest
+        from harness.core.orchestrator import InputAdapter
+        from harness.interfaces.types import UserRequest
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
         outputs = []
@@ -1202,8 +1196,8 @@ class TestFullIntegrationRealLLM:
             def receive(self):
                 count[0] += 1
                 if count[0] == 1:
-                    return _MinimalUserRequest(text="Say 'OK' only.")
-                return _MinimalUserRequest(text=None)
+                    return UserRequest(text="Say 'OK' only.")
+                return UserRequest(text="")
             def send(self, r):
                 outputs.append(r.text)
 
@@ -1232,8 +1226,8 @@ class TestContextAssemblerIntegration:
         from harness.core.container import DIContainer
         from harness.core.orchestrator import (
             InputAdapter, ContextAssembler,
-            _MinimalUserRequest, _MinimalAssemblyContext,
         )
+        from harness.interfaces.types import UserRequest, AssemblyContext
         from harness.core.llm_adapter import MinimalLLMAdapter
         container = DIContainer()
         assemble_calls = []
@@ -1245,13 +1239,13 @@ class TestContextAssemblerIntegration:
             def receive(self):
                 if self.idx < len(self.inputs):
                     t = self.inputs[self.idx]; self.idx += 1
-                    return _MinimalUserRequest(text=t)
-                return _MinimalUserRequest(text="")
+                    return UserRequest(text=t)
+                return UserRequest(text="")
             def send(self, r):
                 pass
 
         class C:
-            def assemble(self, ctx: _MinimalAssemblyContext):
+            def assemble(self, ctx):
                 assemble_calls.append(ctx)
                 return [{"role": "user", "content": "test"}]
 
@@ -1368,20 +1362,20 @@ class TestGuideProviderDuckTyping:
     """Test duck-typing behavior for GuideProvider per §4.2."""
 
     def test_get_guides_returns_bundle(self):
-        from harness.core.orchestrator import _MinimalGuidesBundle, _MinimalAssemblyContext
+        from harness.interfaces.types import GuidesBundle, AssemblyContext, Example
 
         class G:
             def get_guides(self, ctx):
-                return _MinimalGuidesBundle(
+                return GuidesBundle(
                     identity="You are a tester",
                     capabilities=["testing"],
                     rules=["Be thorough"],
                     constraints=["No shortcuts"],
-                    examples=[{"input": "test", "output": "pass"}],
+                    examples=[Example(input="test", output="pass")],
                 )
 
-        guides = G().get_guides(_MinimalAssemblyContext())
-        assert isinstance(guides, _MinimalGuidesBundle)
+        guides = G().get_guides(AssemblyContext())
+        assert isinstance(guides, GuidesBundle)
         assert guides.identity == "You are a tester"
         assert isinstance(guides.capabilities, list)
         assert isinstance(guides.rules, list)
@@ -1393,7 +1387,7 @@ class TestSensorDuckTyping:
     """Test duck-typing behavior for Sensor per §4.6."""
 
     def test_sensor_receives_trajectory(self):
-        from harness.core.orchestrator import _MinimalTrajectory
+        from harness.interfaces.types import Trajectory
 
         data = []
 
@@ -1401,7 +1395,7 @@ class TestSensorDuckTyping:
             def sense(self, trajectory):
                 data.append(trajectory)
 
-        traj = _MinimalTrajectory(final_output="test output", execution_time=1.5)
+        traj = Trajectory(final_output="test output", execution_time=1.5)
         S().sense(traj)
         assert len(data) == 1
         assert data[0].final_output == "test output"

@@ -3,7 +3,7 @@
 该模块提供框架的所有公开接口契约和共享数据类型：
 
 - 16 个大包对象（dataclass）：跨组件传递的数据结构
-- 9 个组件接口（Protocol）：组件间解耦的抽象契约
+- 9 个组件接口（8 个 Protocol + 1 个类型别名）：组件间解耦的抽象契约
 - 2 个辅助类型 + 1 个类型别名：GuideContext、HookContext、Hook
 
 所有实现组件通过满足这些 Protocol 即可接入框架。
@@ -32,7 +32,7 @@ from .types import (
     UserRequest,
 )
 
-# ── 组件接口（9 个 Protocol） ────────────────────────────────────────────
+# ── 组件接口（8 个 Protocol + 1 个类型别名） ─────────────────────────────
 from .input_adapter import InputAdapter
 from .guide_provider import GuideContext, GuideProvider
 from .context_assembler import ContextAssembler

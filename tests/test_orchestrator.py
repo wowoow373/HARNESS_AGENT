@@ -7,7 +7,6 @@ import pytest
 from harness.core.container import DIContainer
 from harness.core.exceptions import ComponentNotRegisteredError, OrchestratorError
 from harness.core.orchestrator import (
-    _MinimalToolCallFunction,
     ContextAssembler,
     GuideProvider,
     InputAdapter,
@@ -15,70 +14,77 @@ from harness.core.orchestrator import (
     MemoryBackend,
     Sensor,
     ToolRegistry,
-    _MinimalAssemblyContext,
-    _MinimalGuidesBundle,
-    _MinimalResponse,
-    _MinimalToolCall,
-    _MinimalTrajectory,
-    _MinimalUserRequest,
+)
+from harness.interfaces.types import (
+    AssemblyContext,
+    GuidesBundle,
+    Message,
+    Response,
+    ToolCall,
+    ToolCallFunction,
+    ToolCallRecord,
+    ToolDefinition,
+    Trajectory,
+    UserRequest,
 )
 
 
 # ---------------------------------------------------------------------------
-# Minimal data structure tests
+# Data structure tests
 # ---------------------------------------------------------------------------
 
 
-class TestMinimalDataStructures:
-    """最小化数据结构测试。"""
+class TestDataStructures:
+    """正式类型数据结构测试。"""
 
     def test_user_request_creation(self):
-        """_MinimalUserRequest 正常创建。"""
-        req = _MinimalUserRequest(text="hello")
+        """UserRequest 正常创建。"""
+        req = UserRequest(text="hello")
         assert req.text == "hello"
         assert req.metadata == {}
 
     def test_user_request_with_metadata(self):
-        """_MinimalUserRequest 带 metadata。"""
-        req = _MinimalUserRequest(text="hello", metadata={"key": "value"})
+        """UserRequest 带 metadata。"""
+        req = UserRequest(text="hello", metadata={"key": "value"})
         assert req.metadata == {"key": "value"}
 
     def test_guides_bundle_creation(self):
-        """_MinimalGuidesBundle 正常创建。"""
-        guides = _MinimalGuidesBundle(identity="test bot")
+        """GuidesBundle 正常创建。"""
+        guides = GuidesBundle(identity="test bot")
         assert guides.identity == "test bot"
         assert guides.rules == []
 
     def test_assembly_context_creation(self):
-        """_MinimalAssemblyContext 正常创建。"""
-        req = _MinimalUserRequest(text="hello")
-        guides = _MinimalGuidesBundle(identity="test")
-        ctx = _MinimalAssemblyContext(user_request=req, guides=guides)
+        """AssemblyContext 正常创建。"""
+        req = UserRequest(text="hello")
+        guides = GuidesBundle(identity="test")
+        ctx = AssemblyContext(user_request=req, guides=guides)
         assert ctx.user_request is req
         assert ctx.guides is guides
         assert ctx.history == []
 
-    def test_tool_call_creation_and_parse(self):
-        """_MinimalToolCall 创建与 JSON 解析。"""
-        tc = _MinimalToolCall(id="call_1", function=_MinimalToolCallFunction(name="read", arguments='{"path": "/tmp/x"}'))
+    def test_tool_call_creation(self):
+        """ToolCall 创建与 JSON 参数解析。"""
+        import json
+        tc = ToolCall(id="call_1", function=ToolCallFunction(name="read", arguments='{"path": "/tmp/x"}'))
         assert tc.id == "call_1"
         assert tc.function.name == "read"
         assert tc.function.arguments == '{"path": "/tmp/x"}'
-        parsed = tc.parse_arguments()
+        parsed = json.loads(tc.function.arguments)
         assert parsed == {"path": "/tmp/x"}
         assert isinstance(parsed, dict)
 
     def test_response_text_only(self):
-        """_MinimalResponse 纯文本。"""
-        resp = _MinimalResponse(text="hi there", stop_reason="end_turn")
+        """Response 纯文本。"""
+        resp = Response(text="hi there", stop_reason="end_turn")
         assert resp.text == "hi there"
         assert resp.tool_uses == []
 
     def test_response_tool_use_only(self):
-        """_MinimalResponse 纯 tool_use。"""
-        resp = _MinimalResponse(
+        """Response 纯 tool_use。"""
+        resp = Response(
             tool_uses=[
-                _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path":"/x"}'))
+                ToolCall(id="c1", function=ToolCallFunction(name="read", arguments='{"path":"/x"}'))
             ],
             stop_reason="tool_use",
         )
@@ -87,11 +93,11 @@ class TestMinimalDataStructures:
         assert resp.tool_uses[0].function.name == "read"
 
     def test_response_text_and_tool_uses_coexistence(self):
-        """_MinimalResponse text + tool_uses 共存。"""
-        resp = _MinimalResponse(
+        """Response text + tool_uses 共存。"""
+        resp = Response(
             text="Let me check that file",
             tool_uses=[
-                _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path":"/x"}'))
+                ToolCall(id="c1", function=ToolCallFunction(name="read", arguments='{"path":"/x"}'))
             ],
             stop_reason="end_turn",
         )
@@ -99,10 +105,10 @@ class TestMinimalDataStructures:
         assert len(resp.tool_uses) == 1
 
     def test_trajectory_creation(self):
-        """_MinimalTrajectory 正常创建。"""
-        traj = _MinimalTrajectory(
-            history=[{"role": "user", "content": "hi"}],
-            tool_calls=[{"tool_name": "read", "result": "data"}],
+        """Trajectory 正常创建。"""
+        traj = Trajectory(
+            history=[Message(role="user", content="hi")],
+            tool_calls=[ToolCallRecord(tool_name="read", result="data")],
             final_output="done",
             execution_time=1.5,
         )
@@ -132,7 +138,7 @@ class TestOrchestratorInit:
         """传入 call_llm 可正常初始化。"""
 
         def mock_llm(msgs, tools):
-            return _MinimalResponse(text="ok")
+            return Response(text="ok")
 
         container = DIContainer()
         orch = LifecycleOrchestrator(container, call_llm=mock_llm)
@@ -208,30 +214,26 @@ class TestShouldExit:
 
     def test_normal_text_does_not_exit(self, orch):
         """正常文本不触发退出。"""
-        assert orch._should_exit(_MinimalUserRequest(text="hello")) is False
+        assert orch._should_exit(UserRequest(text="hello")) is False
 
     def test_empty_text_exits(self, orch):
         """空字符串触发退出。"""
-        assert orch._should_exit(_MinimalUserRequest(text="")) is True
-
-    def test_none_text_exits(self, orch):
-        """None 文本触发退出。"""
-        assert orch._should_exit(_MinimalUserRequest(text=None)) is True
+        assert orch._should_exit(UserRequest(text="")) is True
 
     def test_whitespace_text_exits(self, orch):
         """仅空白字符触发退出。"""
-        assert orch._should_exit(_MinimalUserRequest(text="   ")) is True
-        assert orch._should_exit(_MinimalUserRequest(text="\t\n")) is True
+        assert orch._should_exit(UserRequest(text="   ")) is True
+        assert orch._should_exit(UserRequest(text="\t\n")) is True
 
     def test_exit_command_exits(self, orch):
         """退出关键词 /exit 触发退出。"""
-        assert orch._should_exit(_MinimalUserRequest(text="/exit")) is True
+        assert orch._should_exit(UserRequest(text="/exit")) is True
 
     def test_metadata_exit_flag(self, orch):
         """metadata 中的 exit 标志触发退出。"""
         assert (
             orch._should_exit(
-                _MinimalUserRequest(text="hello", metadata={"exit": True})
+                UserRequest(text="hello", metadata={"exit": True})
             )
             is True
         )
@@ -240,7 +242,7 @@ class TestShouldExit:
         """metadata exit=False 不触发退出。"""
         assert (
             orch._should_exit(
-                _MinimalUserRequest(text="hello", metadata={"exit": False})
+                UserRequest(text="hello", metadata={"exit": False})
             )
             is False
         )
@@ -260,7 +262,7 @@ class TestPhaseInit:
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="hello")
+                return UserRequest(text="hello")
 
             def send(self, r):
                 pass
@@ -281,14 +283,14 @@ class TestPhaseInit:
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="hello")
+                return UserRequest(text="hello")
 
             def send(self, r):
                 pass
 
         class MockGuideProvider:
             def get_guides(self, ctx):
-                return _MinimalGuidesBundle(
+                return GuidesBundle(
                     identity="You are a helpful assistant",
                     rules=["be nice", "be concise"],
                 )
@@ -308,7 +310,7 @@ class TestPhaseInit:
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="hello")
+                return UserRequest(text="hello")
 
             def send(self, r):
                 pass
@@ -344,7 +346,7 @@ class TestPhaseInit:
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="hello")
+                return UserRequest(text="hello")
 
             def send(self, r):
                 pass
@@ -354,7 +356,7 @@ class TestPhaseInit:
         orch = LifecycleOrchestrator(container)
         ctx = orch._phase_init()
 
-        assert isinstance(ctx, _MinimalAssemblyContext)
+        assert isinstance(ctx, AssemblyContext)
         assert ctx.user_request is not None
         assert ctx.guides is not None
 
@@ -372,7 +374,7 @@ class TestPhaseInit:
 
         class ExitAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="/exit")
+                return UserRequest(text="/exit")
             def send(self, r):
                 pass
 
@@ -413,8 +415,8 @@ class TestPhaseLoop:
                 if self.idx < len(self.inputs):
                     t = self.inputs[self.idx]
                     self.idx += 1
-                    return _MinimalUserRequest(text=t)
-                return _MinimalUserRequest(text="")
+                    return UserRequest(text=t)
+                return UserRequest(text="")
 
             def send(self, response):
                 text = response.text if hasattr(response, "text") else str(response)
@@ -428,12 +430,12 @@ class TestPhaseLoop:
         container = self._setup_container_with_adapter()
 
         def text_llm(msgs, tools):
-            return _MinimalResponse(
+            return Response(
                 text="Hello! How can I help?", stop_reason="end_turn"
             )
 
         orch = LifecycleOrchestrator(container, call_llm=text_llm)
-        orch._cached_guides = _MinimalGuidesBundle(identity="test")
+        orch._cached_guides = GuidesBundle(identity="test")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -454,12 +456,12 @@ class TestPhaseLoop:
             last_user_msg = [
                 m for m in msgs if m["role"] == "user"
             ][-1]["content"]
-            return _MinimalResponse(
+            return Response(
                 text=f"Reply to: {last_user_msg}", stop_reason="end_turn"
             )
 
         orch = LifecycleOrchestrator(container, call_llm=multi_turn_llm)
-        orch._cached_guides = _MinimalGuidesBundle(identity="You are helpful")
+        orch._cached_guides = GuidesBundle(identity="You are helpful")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -468,8 +470,8 @@ class TestPhaseLoop:
         adapter = container.resolve(InputAdapter)
         assert len(adapter.outputs) == 2
         assert len(orch._history) == 2
-        assert orch._history[0]["content"] == "Reply to: hello"
-        assert orch._history[1]["content"] == "Reply to: what's up"
+        assert orch._history[0].content == "Reply to: hello"
+        assert orch._history[1].content == "Reply to: what's up"
 
     def test_tool_use_loop(self):
         """tool_use 循环（纯 tool_use → tool result → LLM again → text）。"""
@@ -481,11 +483,11 @@ class TestPhaseLoop:
 
             def list_tools(self):
                 return [
-                    {
-                        "name": "read",
-                        "description": "Read a file",
-                        "parameters": {},
-                    }
+                    ToolDefinition(
+                        name="read",
+                        description="Read a file",
+                        parameters={},
+                    )
                 ]
 
             def execute(self, name, args):
@@ -505,19 +507,19 @@ class TestPhaseLoop:
         def tool_then_text_llm(msgs, tools):
             call_count[0] += 1
             if call_count[0] == 1:
-                return _MinimalResponse(
+                return Response(
                     tool_uses=[
-                        _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
+                        ToolCall(id="c1", function=ToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
                     ],
                     stop_reason="tool_use",
                 )
             else:
-                return _MinimalResponse(
+                return Response(
                     text="File contents: hello world", stop_reason="end_turn"
                 )
 
         orch = LifecycleOrchestrator(container, call_llm=tool_then_text_llm)
-        orch._cached_guides = _MinimalGuidesBundle(identity="test")
+        orch._cached_guides = GuidesBundle(identity="test")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -528,8 +530,8 @@ class TestPhaseLoop:
         assert tr.executed[0] == ("read", {"path": "/tmp/x"})
         assert call_count[0] == 2
         assert len(orch._tool_call_records) == 1
-        assert orch._tool_call_records[0]["tool_name"] == "read"
-        assert orch._history[-1]["content"] == "File contents: hello world"
+        assert orch._tool_call_records[0].tool_name == "read"
+        assert orch._history[-1].content == "File contents: hello world"
 
     def test_text_and_tool_uses_coexistence(self):
         """text + tool_uses 共存场景。"""
@@ -555,10 +557,10 @@ class TestPhaseLoop:
         container.register(ToolRegistry, MockToolRegistry())
 
         def coexistence_llm(msgs, tools):
-            return _MinimalResponse(
+            return Response(
                 text="Let me check that file for you",
                 tool_uses=[
-                    _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
+                    ToolCall(id="c1", function=ToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
                 ],
                 stop_reason="end_turn",
             )
@@ -566,7 +568,7 @@ class TestPhaseLoop:
         orch = LifecycleOrchestrator(
             container, call_llm=coexistence_llm
         )
-        orch._cached_guides = _MinimalGuidesBundle(identity="test")
+        orch._cached_guides = GuidesBundle(identity="test")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -578,7 +580,7 @@ class TestPhaseLoop:
         adapter = container.resolve(InputAdapter)
         assert any("Let me check" in str(o) for o in adapter.outputs)
         assert any(
-            "Let me check" in str(h.get("content", ""))
+            "Let me check" in h.content
             for h in orch._history
         )
 
@@ -611,28 +613,28 @@ class TestPhaseLoop:
         def error_tool_llm(msgs, tools):
             call_count[0] += 1
             if call_count[0] == 1:
-                return _MinimalResponse(
+                return Response(
                     tool_uses=[
-                        _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="write", arguments='{"path":"/protected/file"}')),
+                        ToolCall(id="c1", function=ToolCallFunction(name="write", arguments='{"path":"/protected/file"}')),
                     ],
                     stop_reason="tool_use",
                 )
             else:
-                return _MinimalResponse(
+                return Response(
                     text="I couldn't write to that file",
                     stop_reason="end_turn",
                 )
 
         orch = LifecycleOrchestrator(container, call_llm=error_tool_llm)
-        orch._cached_guides = _MinimalGuidesBundle(identity="test")
+        orch._cached_guides = GuidesBundle(identity="test")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
         orch._phase_loop(ctx)
 
         assert len(orch._tool_call_records) == 1
-        assert orch._tool_call_records[0]["tool_name"] == "write"
-        assert orch._tool_call_records[0]["error"] == "Permission denied"
+        assert orch._tool_call_records[0].tool_name == "write"
+        assert orch._tool_call_records[0].error == "Permission denied"
 
     def test_exit_on_empty_input(self):
         """空输入触发退出（不进入第一轮）。"""
@@ -641,14 +643,14 @@ class TestPhaseLoop:
 
         class EmptyAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="")
+                return UserRequest(text="")
 
             def send(self, r):
                 pass
 
         container.register(InputAdapter, EmptyAdapter())
         orch = LifecycleOrchestrator(container)
-        orch._cached_guides = _MinimalGuidesBundle()
+        orch._cached_guides = GuidesBundle()
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -659,7 +661,7 @@ class TestPhaseLoop:
         container = self._setup_container_with_adapter()
 
         orch = LifecycleOrchestrator(container, call_llm=None)
-        orch._cached_guides = _MinimalGuidesBundle(identity="test")
+        orch._cached_guides = GuidesBundle(identity="test")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -675,19 +677,19 @@ class TestPhaseLoop:
         def tool_llm(msgs, tools):
             call_count[0] += 1
             if call_count[0] == 1:
-                return _MinimalResponse(
+                return Response(
                     tool_uses=[
-                        _MinimalToolCall(id="c1", function=_MinimalToolCallFunction(name="read", arguments='{"path":"/x"}'))
+                        ToolCall(id="c1", function=ToolCallFunction(name="read", arguments='{"path":"/x"}'))
                     ],
                     stop_reason="tool_use",
                 )
             else:
-                return _MinimalResponse(
+                return Response(
                     text="I see the tool failed", stop_reason="end_turn"
                 )
 
         orch = LifecycleOrchestrator(container, call_llm=tool_llm)
-        orch._cached_guides = _MinimalGuidesBundle(identity="test")
+        orch._cached_guides = GuidesBundle(identity="test")
         orch._cached_tools = []
 
         ctx = orch._phase_init()
@@ -695,7 +697,7 @@ class TestPhaseLoop:
         orch._phase_loop(ctx)
         # tool_call_records 中应有带 error 的记录
         if orch._tool_call_records:
-            assert orch._tool_call_records[0]["error"] is not None
+            assert orch._tool_call_records[0].error is not None
 
 
 
@@ -721,9 +723,9 @@ class TestPhaseEnd:
         container.register(Sensor, MockSensor())
 
         orch = LifecycleOrchestrator(container)
-        orch._history = [{"role": "assistant", "content": "final answer"}]
+        orch._history = [Message(role="assistant", content="final answer")]
         orch._tool_call_records = [
-            {"tool_name": "read", "result": "data"}
+            ToolCallRecord(tool_name="read", result="data")
         ]
         orch._start_time = time.time() - 5.0
 
@@ -740,7 +742,7 @@ class TestPhaseEnd:
         """Sensor 未注册时不崩溃。"""
         container = DIContainer()
         orch = LifecycleOrchestrator(container)
-        orch._history = [{"role": "assistant", "content": "done"}]
+        orch._history = [Message(role="assistant", content="done")]
         trajectory = orch._build_trajectory()
         orch._phase_end(trajectory)
 
@@ -759,7 +761,7 @@ class TestPhaseEnd:
 
         orch = LifecycleOrchestrator(container)
         orch._start_time = time.time() - 3.0
-        orch._history = [{"role": "assistant", "content": "done"}]
+        orch._history = [Message(role="assistant", content="done")]
         trajectory = orch._build_trajectory()
         orch._phase_end(trajectory)
 
@@ -770,8 +772,8 @@ class TestPhaseEnd:
         """_phase_end 后内部状态被清理。"""
         container = DIContainer()
         orch = LifecycleOrchestrator(container)
-        orch._history = [{"role": "assistant", "content": "test"}]
-        orch._tool_call_records = [{"tool_name": "read"}]
+        orch._history = [Message(role="assistant", content="test")]
+        orch._tool_call_records = [ToolCallRecord(tool_name="read")]
         orch._should_exit_flag = True
 
         trajectory = orch._build_trajectory()
@@ -804,8 +806,8 @@ class TestRun:
                 if self.idx < len(self.inputs):
                     t = self.inputs[self.idx]
                     self.idx += 1
-                    return _MinimalUserRequest(text=t)
-                return _MinimalUserRequest(text="")
+                    return UserRequest(text=t)
+                return UserRequest(text="")
 
             def send(self, response):
                 self.outputs.append(
@@ -814,7 +816,7 @@ class TestRun:
 
         class MockGuideProvider:
             def get_guides(self, ctx):
-                return _MinimalGuidesBundle(
+                return GuidesBundle(
                     identity="You are a helpful assistant"
                 )
 
@@ -835,16 +837,13 @@ class TestRun:
             def assemble(self, ctx):
                 msgs = []
                 if ctx.guides and ctx.guides.identity:
-                    msgs.append(
-                        {"role": "system", "content": ctx.guides.identity}
-                    )
+                    msgs.append(Message(
+                        role="system", content=ctx.guides.identity
+                    ))
                 if ctx.user_request and ctx.user_request.text:
-                    msgs.append(
-                        {
-                            "role": "user",
-                            "content": ctx.user_request.text,
-                        }
-                    )
+                    msgs.append(Message(
+                        role="user", content=ctx.user_request.text,
+                    ))
                 return msgs
 
         class MockToolRegistry:
@@ -876,7 +875,7 @@ class TestRun:
         container.register(Sensor, MockSensor())
 
         def mock_llm(msgs, tools):
-            return _MinimalResponse(text="mock reply", stop_reason="end_turn")
+            return Response(text="mock reply", stop_reason="end_turn")
 
         orch = LifecycleOrchestrator(container, call_llm=mock_llm)
         orch.run()
@@ -898,7 +897,7 @@ class TestRun:
             def receive(self):
                 self.call_count += 1
                 if self.call_count == 1:
-                    return _MinimalUserRequest(text="hello")
+                    return UserRequest(text="hello")
                 raise RuntimeError("Simulated error")
 
             def send(self, r):
@@ -915,7 +914,7 @@ class TestRun:
         container.register(Sensor, SpySensor())
 
         def mock_llm(msgs, tools):
-            return _MinimalResponse(text="reply", stop_reason="end_turn")
+            return Response(text="reply", stop_reason="end_turn")
 
         orch = LifecycleOrchestrator(container, call_llm=mock_llm)
 
@@ -940,8 +939,8 @@ class TestRun:
                 if self.idx < len(self.inputs):
                     t = self.inputs[self.idx]
                     self.idx += 1
-                    return _MinimalUserRequest(text=t)
-                return _MinimalUserRequest(text="")
+                    return UserRequest(text=t)
+                return UserRequest(text="")
 
             def send(self, response):
                 self.outputs.append(
@@ -951,7 +950,7 @@ class TestRun:
         container.register(InputAdapter, MockAdapter())
 
         def mock_llm(msgs, tools):
-            return _MinimalResponse(
+            return Response(
                 text="minimal response", stop_reason="end_turn"
             )
 
@@ -987,7 +986,7 @@ class TestHarnessFlow:
 
         class MockAdapter:
             def receive(self):
-                return _MinimalUserRequest(text="hi")
+                return UserRequest(text="hi")
 
             def send(self, r):
                 pass
@@ -997,3 +996,121 @@ class TestHarnessFlow:
         harness = Harness.from_container(container)
         assert harness is not None
         assert harness._orchestrator is not None
+
+
+# ---------------------------------------------------------------------------
+# AC-ORCH-14: 内层循环不调用 ContextAssembler
+# ---------------------------------------------------------------------------
+
+
+class TestContextAssemblerCallCount:
+    """验证 AC-ORCH-14：tool_use 内层循环中 ContextAssembler 不重复调用。"""
+
+    def _setup_for_assemble_count_test(self):
+        """搭建含 tool_use 循环和 spy ContextAssembler 的测试环境。"""
+        from harness.core.container import DIContainer
+        from harness.core.orchestrator import (
+            InputAdapter, ToolRegistry, ContextAssembler,
+        )
+        from harness.interfaces.types import (
+            UserRequest, GuidesBundle,
+            ToolDefinition, ToolCall, ToolCallFunction, Response,
+        )
+
+        container = DIContainer()
+
+        class MockAdapter:
+            def __init__(self):
+                self.inputs = ["hello", ""]
+                self.outputs = []
+                self.idx = 0
+
+            def receive(self):
+                if self.idx < len(self.inputs):
+                    t = self.inputs[self.idx]
+                    self.idx += 1
+                    return UserRequest(text=t)
+                return UserRequest(text="")
+
+            def send(self, response):
+                self.outputs.append(
+                    response.text if hasattr(response, "text") else str(response)
+                )
+
+        class SpyAssembler:
+            def __init__(self):
+                self.call_count = 0
+
+            def assemble(self, ctx):
+                self.call_count += 1
+                return [{"role": "user", "content": ctx.user_request.text or ""}]
+
+        class MockToolRegistry:
+            call_count = [0]
+
+            def list_tools(self):
+                return [ToolDefinition(name="test_tool", description="A test tool")]
+
+            def execute(self, name, args):
+                class TR:
+                    success = True
+                    content = f"result for {args}"
+                    error = None
+                return TR()
+
+        container.register(InputAdapter, MockAdapter())
+        container.register(ToolRegistry, MockToolRegistry())
+
+        call_count = [0]
+
+        def tool_llm(msgs, tools):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return Response(
+                    tool_uses=[ToolCall(id="c1", function=ToolCallFunction(
+                        name="test_tool", arguments='{"key":"value"}'
+                    ))],
+                    stop_reason="tool_use",
+                )
+            elif call_count[0] == 2:
+                return Response(
+                    text="Done after tool", stop_reason="end_turn"
+                )
+            return Response(text="extra", stop_reason="end_turn")
+
+        spy = SpyAssembler()
+        container.register(ContextAssembler, spy)
+
+        return container, spy, tool_llm
+
+    def test_inner_loop_does_not_call_assemble(self):
+        """AC-ORCH-14：内层 tool_use 循环中 assemble() 调用次数为 0。"""
+        container, spy, tool_llm = self._setup_for_assemble_count_test()
+
+        orch = LifecycleOrchestrator(container, call_llm=tool_llm)
+        orch._cached_guides = GuidesBundle(identity="test")
+        orch._cached_tools = []
+
+        ctx = orch._phase_init()
+        orch._phase_loop(ctx)
+
+        # assemble() 在每次外层循环开始时调用 1 次
+        # 本测试只有 1 轮用户输入（1 次外层循环）→ 恰好 1 次
+        assert spy.call_count == 1, (
+            f"Expected assemble() to be called exactly once per outer loop iteration, "
+            f"but got {spy.call_count} calls"
+        )
+
+    def test_outer_loop_calls_assemble_once_per_turn(self):
+        """AC-ORCH-14：外层循环每轮仅调用 assemble() 一次。"""
+        container, spy, tool_llm = self._setup_for_assemble_count_test()
+
+        orch = LifecycleOrchestrator(container, call_llm=tool_llm)
+        orch._cached_guides = GuidesBundle(identity="test")
+        orch._cached_tools = []
+
+        ctx = orch._phase_init()
+        orch._phase_loop(ctx)
+
+        # 1 次外层循环 → 恰好 1 次 assemble()
+        assert spy.call_count == 1

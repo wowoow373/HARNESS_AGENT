@@ -18,26 +18,33 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .container import DIContainer
 from .exceptions import ComponentNotRegisteredError, OrchestratorError
-from .types import (
-    _MinimalAssemblyContext,
-    _MinimalGuidesBundle,
-    _MinimalResponse,
-    _MinimalToolCall,
-    _MinimalToolCallFunction,
-    _MinimalTrajectory,
-    _MinimalUserRequest,
+from ..interfaces.types import (
+    AssemblyContext,
+    GuidesBundle,
+    Message,
+    Response,
+    ToolCall,
+    ToolCallRecord,
+    ToolDefinition,
+    Trajectory,
+    UserRequest,
 )
 from ..interfaces import (
     ContextAssembler,
     GuideProvider,
     InputAdapter,
-    MCPManager,
     MemoryBackend,
     Sensor,
-    Tool,
     ToolRegistry,
 )
-from ..messaging import build_assistant_message, build_tool_result_message
+# 预留（后续 batch 启用）：
+# from ..interfaces import MCPManager, Tool
+from ..messaging import (
+    build_assistant_message,
+    build_tool_result_message,
+    messages_to_dicts,
+    tool_definitions_to_openai,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,21 +84,21 @@ class LifecycleOrchestrator:
         Args:
             container: DI 容器，用于解析组件实例。
             call_llm: LLM 调用函数，签名:
-                      (messages: List[Dict], tools: List[Dict]) → _MinimalResponse。
+                      (messages: List[Dict], tools: List[Dict]) → Response。
                       为 None 时 tool_use 循环不可用，但仍可验证编排流程。
         """
         self.container = container
         self.call_llm = call_llm
 
         # 会话状态
-        self._history: List[Dict[str, Any]] = []
-        self._tool_call_records: List[Dict[str, Any]] = []
+        self._history: List[Message] = []
+        self._tool_call_records: List[ToolCallRecord] = []
         self._start_time: float = 0.0
         self._should_exit_flag: bool = False
 
         # 阶段一缓存的不可变数据
-        self._cached_guides: Optional[_MinimalGuidesBundle] = None
-        self._cached_tools: List[Dict[str, Any]] = []
+        self._cached_guides: Optional[GuidesBundle] = None
+        self._cached_tools: List[ToolDefinition] = []
         self._cached_tool_registry: Optional[Any] = None  # 避免 phase_init/loop 重复 resolve
 
     # ------------------------------------------------------------------
@@ -126,7 +133,7 @@ class LifecycleOrchestrator:
     # 阶段一：会话初始化
     # ------------------------------------------------------------------
 
-    def _phase_init(self) -> _MinimalAssemblyContext:
+    def _phase_init(self) -> AssemblyContext:
         """阶段一：会话初始化。
 
         步骤：
@@ -137,7 +144,7 @@ class LifecycleOrchestrator:
         5. 构建并返回 AssemblyContext
 
         Returns:
-            _MinimalAssemblyContext: 初始化的上下文对象。
+            AssemblyContext: 初始化的上下文对象。
 
         Raises:
             ComponentNotRegisteredError: InputAdapter 未注册。
@@ -147,25 +154,23 @@ class LifecycleOrchestrator:
 
         # 1. InputAdapter（必需组件）
         adapter = self.container.resolve(InputAdapter)
-        raw_request = adapter.receive()
-        user_request = self._normalize_user_request(raw_request)
+        user_request = adapter.receive()
         logger.debug(f"Received user request: {user_request.text}")
 
         # 检查退出信号 — 用户在第一轮就发出退出指令时直接跳到阶段三
         if self._should_exit(user_request):
             logger.info("Exit signal received in phase init, skipping to phase end")
             self._should_exit_flag = True
-            return _MinimalAssemblyContext(user_request=user_request)
+            return AssemblyContext(user_request=user_request)
 
         # 2. GuideProvider（可选）
-        guides = _MinimalGuidesBundle()
+        guides = GuidesBundle()
         guide_provider = self._resolve_optional(GuideProvider)
         if guide_provider:
             try:
-                # 构建 GuideContext（最小表示）
-                guide_ctx = _MinimalAssemblyContext(user_request=user_request)
-                raw_guides = guide_provider.get_guides(guide_ctx)
-                guides = self._normalize_guides(raw_guides)
+                # 构建 GuideContext（使用 AssemblyContext）
+                guide_ctx = AssemblyContext(user_request=user_request)
+                guides = guide_provider.get_guides(guide_ctx)
                 logger.debug(f"Guides loaded: identity={guides.identity[:50]}...")
             except Exception as e:
                 logger.warning(f"GuideProvider.get_guides() failed: {e}")
@@ -182,7 +187,7 @@ class LifecycleOrchestrator:
                 logger.warning(f"MemoryBackend.search() failed: {e}")
 
         # 4. ToolRegistry（可选，缓存引用供 _phase_loop 使用）
-        available_tools: List[Dict[str, Any]] = []
+        available_tools: List[ToolDefinition] = []
         tool_registry = self._resolve_optional(ToolRegistry)
         self._cached_tool_registry = tool_registry
         if tool_registry:
@@ -194,7 +199,7 @@ class LifecycleOrchestrator:
         self._cached_tools = available_tools
 
         # 5. 构建 AssemblyContext
-        ctx = _MinimalAssemblyContext(
+        ctx = AssemblyContext(
             user_request=user_request,
             guides=guides,
             available_tools=available_tools,
@@ -209,7 +214,7 @@ class LifecycleOrchestrator:
     # 阶段二：多轮对话循环
     # ------------------------------------------------------------------
 
-    def _phase_loop(self, initial_ctx: _MinimalAssemblyContext) -> None:
+    def _phase_loop(self, initial_ctx: AssemblyContext) -> None:
         """阶段二：多轮对话循环。
 
         外层循环（每轮用户输入触发一次）：
@@ -265,13 +270,13 @@ class LifecycleOrchestrator:
                     break
 
                 try:
-                    response = self.call_llm(messages, self._cached_tools)
+                    response = self.call_llm(
+                        messages_to_dicts(messages),
+                        tool_definitions_to_openai(self._cached_tools),
+                    )
                 except Exception as e:
                     logger.error(f"LLM call failed: {e}")
                     raise
-
-                # 标准化 response 为 _MinimalResponse
-                response = self._normalize_response(response)
 
                 # --- 处理 tool_uses ---
                 if response.tool_uses:
@@ -287,7 +292,7 @@ class LifecycleOrchestrator:
                         result: Any = None
 
                         try:
-                            args = tc.parse_arguments()
+                            args = json.loads(tc.function.arguments)
                         except json.JSONDecodeError as e:
                             error = f"Failed to parse tool arguments: {e}"
                             after_ts = time.time()
@@ -316,15 +321,15 @@ class LifecycleOrchestrator:
                             success = error is None
                             content = result
 
-                        # 记录到 tool_call_records
-                        self._tool_call_records.append({
-                            "tool_name": tc.function.name,
-                            "arguments": args,
-                            "result": content if success else None,
-                            "started_at": before_ts,
-                            "finished_at": after_ts,
-                            "error": error,
-                        })
+                        # 记录到 tool_call_records（使用正式类型 ToolCallRecord）
+                        self._tool_call_records.append(ToolCallRecord(
+                            tool_name=tc.function.name,
+                            arguments=args,
+                            result=content if success else None,
+                            started_at=before_ts,
+                            finished_at=after_ts,
+                            error=error,
+                        ))
 
                         # 构造 tool result message 追加到 messages
                         tool_msg = build_tool_result_message(tc, content, error)
@@ -334,7 +339,7 @@ class LifecycleOrchestrator:
                     if response.text:
                         adapter.send(response)
                         self._history.append(
-                            {"role": "assistant", "content": response.text}
+                            Message(role="assistant", content=response.text or "")
                         )
                         break
 
@@ -344,11 +349,11 @@ class LifecycleOrchestrator:
                 # --- 处理纯 text 响应（无 tool_uses） ---
                 if response.text:
                     messages.append(
-                        {"role": "assistant", "content": response.text}
+                        Message(role="assistant", content=response.text or "")
                     )
                     adapter.send(response)
                     self._history.append(
-                        {"role": "assistant", "content": response.text}
+                        Message(role="assistant", content=response.text or "")
                     )
                     break  # 跳出内层循环
 
@@ -359,16 +364,15 @@ class LifecycleOrchestrator:
                 break
 
             # === 外层：等待下一轮用户输入 ===
-            raw_request = adapter.receive()
-            new_request = self._normalize_user_request(raw_request)
+            user_request = adapter.receive()
 
-            if self._should_exit(new_request):
+            if self._should_exit(user_request):
                 self._should_exit_flag = True
                 break
 
             # 更新 ctx 用于下一轮
-            ctx = _MinimalAssemblyContext(
-                user_request=new_request,
+            ctx = AssemblyContext(
+                user_request=user_request,
                 guides=self._cached_guides,
                 available_tools=self._cached_tools,
                 history=self._history,
@@ -381,7 +385,7 @@ class LifecycleOrchestrator:
     # 阶段三：会话结束
     # ------------------------------------------------------------------
 
-    def _phase_end(self, trajectory: _MinimalTrajectory) -> None:
+    def _phase_end(self, trajectory: Trajectory) -> None:
         """阶段三：会话结束。
 
         Args:
@@ -428,13 +432,16 @@ class LifecycleOrchestrator:
             )
             return None
 
-    def _should_exit(self, user_request: _MinimalUserRequest) -> bool:
+    def _should_exit(self, user_request: UserRequest) -> bool:
         """判断是否应该退出会话。
 
         退出条件（任一满足即退出）：
-        1. user_request.text 为 None 或空字符串或仅空白字符
+        1. user_request.text 为空字符串或仅空白字符
         2. user_request.text 匹配退出关键词 "/exit"
         3. user_request.metadata 中包含 "exit": True
+
+        注意：UserRequest.text 是 str（非 Optional），
+        空字符串同时表示"无输入"和"EOF"语义。
 
         Args:
             user_request: 用户请求。
@@ -442,7 +449,7 @@ class LifecycleOrchestrator:
         Returns:
             True 如果应该退出，False 否则。
         """
-        if user_request.text is None:
+        if not user_request.text:
             return True
         if user_request.text.strip() == "":
             return True
@@ -452,19 +459,19 @@ class LifecycleOrchestrator:
             return True
         return False
 
-    def _build_trajectory(self) -> _MinimalTrajectory:
+    def _build_trajectory(self) -> Trajectory:
         """从会话记录组装完整的 Trajectory 对象。
 
         Returns:
-            _MinimalTrajectory: 完整的执行轨迹。
+            Trajectory: 完整的执行轨迹。
         """
         execution_time = time.time() - self._start_time
         final_output = ""
         if self._history:
             last = self._history[-1]
-            final_output = last.get("content", "")
+            final_output = last.content if last else ""
 
-        return _MinimalTrajectory(
+        return Trajectory(
             history=list(self._history),
             tool_calls=list(self._tool_call_records),
             final_output=final_output,
@@ -472,98 +479,25 @@ class LifecycleOrchestrator:
         )
 
     def _fallback_assemble(
-        self, ctx: _MinimalAssemblyContext
-    ) -> List[Dict[str, Any]]:
+        self, ctx: AssemblyContext
+    ) -> List[Message]:
         """无 ContextAssembler 时的降级上下文组装。
 
         Args:
             ctx: AssemblyContext。
 
         Returns:
-            降级的 message 列表。
+            降级的 message 列表（Message 对象）。
         """
-        messages: List[Dict[str, Any]] = []
+        messages: List[Message] = []
         if ctx.guides and ctx.guides.identity:
-            messages.append({
-                "role": "system",
-                "content": ctx.guides.identity,
-            })
+            messages.append(Message(
+                role="system",
+                content=ctx.guides.identity,
+            ))
         if ctx.user_request and ctx.user_request.text:
-            messages.append({
-                "role": "user",
-                "content": ctx.user_request.text,
-            })
+            messages.append(Message(
+                role="user",
+                content=ctx.user_request.text,
+            ))
         return messages
-
-    # ------------------------------------------------------------------
-    # 标准化辅助方法（将外部对象转为内部最小表示）
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _normalize_user_request(raw: Any) -> _MinimalUserRequest:
-        """将外部 UserRequest 转为 _MinimalUserRequest。
-
-        支持两种输入形式：
-        - 已经是 _MinimalUserRequest → 直接返回
-        - 有 text 属性的对象 → 提取 text 和 metadata
-        """
-        if isinstance(raw, _MinimalUserRequest):
-            return raw
-        text = getattr(raw, "text", None)
-        metadata = getattr(raw, "metadata", {})
-        return _MinimalUserRequest(text=text, metadata=metadata)
-
-    @staticmethod
-    def _normalize_guides(raw: Any) -> _MinimalGuidesBundle:
-        """将外部 GuidesBundle 转为 _MinimalGuidesBundle。"""
-        if isinstance(raw, _MinimalGuidesBundle):
-            return raw
-        identity = getattr(raw, "identity", "")
-        capabilities = getattr(raw, "capabilities", [])
-        rules = getattr(raw, "rules", [])
-        constraints = getattr(raw, "constraints", [])
-        examples = getattr(raw, "examples", [])
-        return _MinimalGuidesBundle(
-            identity=identity,
-            capabilities=capabilities,
-            rules=rules,
-            constraints=constraints,
-            examples=examples,
-        )
-
-    @staticmethod
-    def _normalize_response(raw: Any) -> _MinimalResponse:
-        """将外部 Response 转为 _MinimalResponse。
-
-        支持两种输入形式：
-        - 已经是 _MinimalResponse → 直接返回
-        - 其他对象 → 尝试提取 text、tool_uses、stop_reason 属性
-        """
-        if isinstance(raw, _MinimalResponse):
-            return raw
-
-        text = getattr(raw, "text", None)
-        thinking = getattr(raw, "thinking", None)
-        stop_reason = getattr(raw, "stop_reason", "end_turn")
-        raw_tool_uses = getattr(raw, "tool_uses", [])
-
-        tool_uses: List[_MinimalToolCall] = []
-        for tc in raw_tool_uses:
-            if isinstance(tc, _MinimalToolCall):
-                tool_uses.append(tc)
-            else:
-                tool_uses.append(_MinimalToolCall(
-                    id=getattr(tc, "id", ""),
-                    type=getattr(tc, "type", "function"),
-                    function=_MinimalToolCallFunction(
-                        name=getattr(tc, "name", ""),
-                        arguments=getattr(tc, "arguments", "{}"),
-                    ),
-                ))
-
-        return _MinimalResponse(
-            text=text,
-            thinking=thinking,
-            tool_uses=tool_uses,
-            stop_reason=stop_reason,
-        )

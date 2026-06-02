@@ -1,12 +1,22 @@
 """Harness Agent Template — 内部数据结构。
 
-batch-01 MVP 的最小化数据类型。batch-02-1 会替换为
-``harness/interfaces/`` 中的正式类型定义。此模块届时标记为废弃。
+DEPRECATED — use ``harness.interfaces.types`` instead.
+
+batch-01 MVP 的最小化数据类型。batch-02-1 已完成迁移，
+所有源码和测试已使用 ``harness.interfaces.types`` 中的正式类型。
+此模块仅保留供向后兼容参考，不应在新代码中使用。
 """
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+warnings.warn(
+    "harness.core.types is deprecated. Use harness.interfaces.types instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 @dataclass

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..core.exceptions import OrchestratorError
-from ..core.orchestrator import _MinimalResponse, _MinimalToolCall, _MinimalToolCallFunction
+from ..interfaces.types import Response, ToolCall, ToolCallFunction
 
 # ── .env 文件默认路径 ──────────────────────────────────────────────
 
@@ -137,7 +137,7 @@ class MinimalLLMAdapter:
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> _MinimalResponse:
+    ) -> Response:
         """调用 LLM API。
 
         实现 call_llm 签名约定，可直接注入 LifecycleOrchestrator。
@@ -147,7 +147,7 @@ class MinimalLLMAdapter:
             tools: 工具定义列表（可选）。
 
         Returns:
-            _MinimalResponse: 标准化的 LLM 响应。
+            Response: 标准化的 LLM 响应。
 
         Raises:
             OrchestratorError: API 调用失败时抛出。
@@ -235,8 +235,8 @@ class MinimalLLMAdapter:
                 f"LLM API unexpected error: {e}"
             ) from e
 
-    def _parse_response(self, response_json: Dict[str, Any]) -> _MinimalResponse:
-        """将 OpenAI chat completion 响应解析为 _MinimalResponse。
+    def _parse_response(self, response_json: Dict[str, Any]) -> Response:
+        """将 OpenAI chat completion 响应解析为 Response。
 
         处理三种响应形态：
         - 纯 text: choices[0].message.content 有值, 无 tool_calls
@@ -247,7 +247,7 @@ class MinimalLLMAdapter:
             response_json: API 返回的 JSON 响应。
 
         Returns:
-            _MinimalResponse: 标准化的响应对象。
+            Response: 标准化的响应对象。
 
         Raises:
             OrchestratorError: 响应格式不符合预期。
@@ -270,15 +270,15 @@ class MinimalLLMAdapter:
         ) or message.get("reasoning")
 
         # 提取 tool_uses
-        tool_uses: List[_MinimalToolCall] = []
+        tool_uses: List[ToolCall] = []
         raw_tool_calls = message.get("tool_calls", [])
         if raw_tool_calls:
             for tc in raw_tool_calls:
                 try:
-                    tool_uses.append(_MinimalToolCall(
+                    tool_uses.append(ToolCall(
                         id=tc["id"],
                         type=tc.get("type", "function"),
-                        function=_MinimalToolCallFunction(
+                        function=ToolCallFunction(
                             name=tc["function"]["name"],
                             arguments=tc["function"]["arguments"],
                         ),
@@ -298,7 +298,7 @@ class MinimalLLMAdapter:
         else:
             stop_reason = finish_reason
 
-        return _MinimalResponse(
+        return Response(
             text=text,
             thinking=thinking,
             tool_uses=tool_uses,

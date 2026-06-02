@@ -11,6 +11,7 @@
 API 配置从 harness/config/.env 读取。
 """
 
+import json
 import os
 import sys
 import time
@@ -49,20 +50,23 @@ print()
 from harness.core.container import DIContainer
 from harness.core.llm_adapter import MinimalLLMAdapter
 from harness.core.orchestrator import (
-    _MinimalToolCallFunction,
     InputAdapter,
     Sensor,
     ContextAssembler,
     GuideProvider,
     MemoryBackend,
     ToolRegistry,
-    _MinimalGuidesBundle,
-    _MinimalResponse,
-    _MinimalToolCall,
-    _MinimalUserRequest,
-    _MinimalTrajectory,
+    LifecycleOrchestrator,
 )
-from harness.core.orchestrator import LifecycleOrchestrator
+from harness.interfaces.types import (
+    GuidesBundle,
+    Message,
+    Response,
+    ToolCall,
+    ToolCallFunction,
+    Trajectory,
+    UserRequest,
+)
 
 passed = 0
 failed = 0
@@ -103,7 +107,7 @@ response = adapter(
 )
 t1_elapsed = time.time() - t1_start
 
-check("API 返回 _MinimalResponse 类型", isinstance(response, _MinimalResponse))
+check("API 返回 Response 类型", isinstance(response, Response))
 check("响应包含文本内容", response.text is not None and len(response.text) > 0,
       f"text={repr(response.text[:100])}")
 check("stop_reason 正确", response.stop_reason == "end_turn",
@@ -189,8 +193,8 @@ class SingleTurnAdapter:
         if self.idx < len(self.inputs):
             t = self.inputs[self.idx]
             self.idx += 1
-            return _MinimalUserRequest(text=t)
-        return _MinimalUserRequest(text="")  # 空 → 退出
+            return UserRequest(text=t)
+        return UserRequest(text="")  # 空 → 退出
 
     def send(self, response):
         text = getattr(response, "text", str(response))
@@ -201,9 +205,9 @@ class SimpleAssembler:
     def assemble(self, ctx):
         msgs = []
         if ctx.guides and ctx.guides.identity:
-            msgs.append({"role": "system", "content": ctx.guides.identity})
+            msgs.append(Message(role="system", content=ctx.guides.identity))
         if ctx.user_request and ctx.user_request.text:
-            msgs.append({"role": "user", "content": ctx.user_request.text})
+            msgs.append(Message(role="user", content=ctx.user_request.text))
         return msgs
 
 # 3.3 构建 Sensor（捕获 Trajectory 用于验证）
@@ -232,7 +236,7 @@ llm_adapter = MinimalLLMAdapter(
 
 t3_start = time.time()
 orch = LifecycleOrchestrator(container, call_llm=llm_adapter)
-orch._cached_guides = _MinimalGuidesBundle(
+orch._cached_guides = GuidesBundle(
     identity="你是一个有帮助的编程助手。请用中文回复，简洁明了。"
 )
 orch._cached_tools = []
@@ -268,11 +272,11 @@ check("总耗时 < 60s", t3_elapsed < 60, f"elapsed={t3_elapsed:.2f}s")
 
 if sensor_inst.received_trajectory:
     traj = sensor_inst.received_trajectory
-    check("Trajectory 是 _MinimalTrajectory 类型", isinstance(traj, _MinimalTrajectory))
+    check("Trajectory 是 Trajectory 类型", isinstance(traj, Trajectory))
     # _history 在 _phase_end 中已清空，应通过 Trajectory 验证
     check("Trajectory 记录了 assistant 回复（history 非空且含 assistant）",
-          any(h.get("role") == "assistant" for h in traj.history),
-          f"roles in history: {[h.get('role') for h in traj.history]}")
+          any(h.role == "assistant" for h in traj.history),
+          f"roles in history: {[h.role for h in traj.history]}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -299,8 +303,8 @@ class MultiTurnAdapter:
         if self.idx < len(self.inputs):
             t = self.inputs[self.idx]
             self.idx += 1
-            return _MinimalUserRequest(text=t)
-        return _MinimalUserRequest(text="")
+            return UserRequest(text=t)
+        return UserRequest(text="")
 
     def send(self, response):
         text = getattr(response, "text", str(response))
@@ -329,7 +333,7 @@ llm4 = MinimalLLMAdapter(
 
 t4_start = time.time()
 orch4 = LifecycleOrchestrator(container4, call_llm=llm4)
-orch4._cached_guides = _MinimalGuidesBundle(
+orch4._cached_guides = GuidesBundle(
     identity="你是一个有帮助的助手。请用中文回复，简洁明了，不超过 3 句话。"
 )
 orch4._cached_tools = []

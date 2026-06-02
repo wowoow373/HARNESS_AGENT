@@ -13,7 +13,7 @@ from harness.core.llm_adapter import (
     MinimalLLMAdapter,
     _read_simple_dotenv,
 )
-from harness.core.orchestrator import _MinimalResponse, _MinimalToolCall, _MinimalToolCallFunction
+from harness.interfaces.types import Response
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ class TestParseResponse:
             ]
         }
         result = adapter._parse_response(response_json)
-        assert isinstance(result, _MinimalResponse)
+        assert isinstance(result, Response)
         assert result.text == "Hello! How can I help?"
         assert result.tool_uses == []
         assert result.stop_reason == "end_turn"
@@ -400,7 +400,7 @@ class TestCall:
     """__call__ 测试。"""
 
     def test_call_returns_minimal_response(self):
-        """__call__ 返回 _MinimalResponse 类型。"""
+        """__call__ 返回 Response 类型。"""
         adapter = MinimalLLMAdapter(api_key="test")
 
         mock_response = {
@@ -414,7 +414,7 @@ class TestCall:
                 json.dumps(mock_response).encode("utf-8")
             )
             result = adapter([{"role": "user", "content": "hi"}])
-            assert isinstance(result, _MinimalResponse)
+            assert isinstance(result, Response)
             assert result.text == "hello"
 
     def test_call_signature_matches_call_llm(self):

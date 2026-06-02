@@ -1,14 +1,123 @@
 """Harness Agent Template — 消息构造工具。
 
 将编排器内部数据结构转换为 OpenAI 兼容的 message dict 格式。
+提供 Message ↔ dict 双向转换、ToolDefinition → OpenAI tool format 转换。
 """
 
 from typing import Any, Dict, List
 
-from ..core.types import _MinimalResponse, _MinimalToolCall
+from ..interfaces.types import Message, Response, ToolCall, ToolDefinition
 
 
-def build_assistant_message(response: _MinimalResponse) -> Dict[str, Any]:
+# ---------------------------------------------------------------------------
+# Message ↔ dict 双向转换
+# ---------------------------------------------------------------------------
+
+
+def message_to_dict(msg: Message) -> Dict[str, Any]:
+    """将 Message 对象转为 OpenAI 兼容 dict。
+
+    Args:
+        msg: Message 对象。
+
+    Returns:
+        OpenAI 兼容的 message dict。
+    """
+    result: Dict[str, Any] = {"role": msg.role, "content": msg.content}
+    if msg.tool_call_id is not None:
+        result["tool_call_id"] = msg.tool_call_id
+    return result
+
+
+def messages_to_dicts(messages: List[Any]) -> List[Dict[str, Any]]:
+    """批量将 Message 列表转为 OpenAI 兼容 dict 列表。
+
+    对于已经是 dict 的元素直接透传，Message 对象则转换。
+
+    Args:
+        messages: Message 对象或 dict 的混合列表。
+
+    Returns:
+        OpenAI 兼容的 message dict 列表。
+    """
+    result: List[Dict[str, Any]] = []
+    for m in messages:
+        if isinstance(m, Message):
+            result.append(message_to_dict(m))
+        elif isinstance(m, dict):
+            result.append(m)
+        else:
+            # 兼容其他有 role/content 属性的对象
+            result.append(message_to_dict(Message(
+                role=getattr(m, "role", "user"),
+                content=getattr(m, "content", ""),
+                tool_call_id=getattr(m, "tool_call_id", None),
+            )))
+    return result
+
+
+def dict_to_message(d: Dict[str, Any]) -> Message:
+    """将 OpenAI 兼容 dict 转为 Message 对象。
+
+    从 dict 提取 role、content、tool_call_id。
+    content 为 None 或缺失时默认 ""。
+    忽略 tool_calls 等 Message 不包含的字段。
+
+    Args:
+        d: OpenAI 兼容的 message dict。
+
+    Returns:
+        Message 对象。
+    """
+    return Message(
+        role=d.get("role", "user"),
+        content=d.get("content") or "",
+        tool_call_id=d.get("tool_call_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# ToolDefinition → OpenAI tool format
+# ---------------------------------------------------------------------------
+
+
+def tool_definition_to_openai(td: ToolDefinition) -> Dict[str, Any]:
+    """将 ToolDefinition 转为 OpenAI tool format。
+
+    Args:
+        td: ToolDefinition 对象。
+
+    Returns:
+        OpenAI tool format dict。
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": td.name,
+            "description": td.description,
+            "parameters": td.parameters,
+        },
+    }
+
+
+def tool_definitions_to_openai(tools: List[ToolDefinition]) -> List[Dict[str, Any]]:
+    """批量将 ToolDefinition 列表转为 OpenAI tool format 列表。
+
+    Args:
+        tools: ToolDefinition 对象列表。
+
+    Returns:
+        OpenAI tool format dict 列表。
+    """
+    return [tool_definition_to_openai(t) for t in tools]
+
+
+# ---------------------------------------------------------------------------
+# 现有函数（签名升级为正式类型）
+# ---------------------------------------------------------------------------
+
+
+def build_assistant_message(response: Response) -> Dict[str, Any]:
     """将 Response 转为含 tool_calls 的 assistant message dict。
 
     OpenAI 格式::
@@ -54,7 +163,7 @@ def build_assistant_message(response: _MinimalResponse) -> Dict[str, Any]:
 
 
 def build_tool_result_message(
-    tool_call: _MinimalToolCall,
+    tool_call: ToolCall,
     result: Any,
     error: str | None = None,
 ) -> Dict[str, Any]:
