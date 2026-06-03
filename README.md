@@ -110,6 +110,13 @@ harness_agent/
 │   └── messaging/                    # 消息格式转换
 │       ├── __init__.py               # 导出转换函数
 │       └── builder.py                # Message↔dict + ToolDefinition→OpenAI
+│   └── components/                    # 组件默认实现
+│       ├── memory_backend/            # Batch-03
+│       │   └── md_memory.py           # MdMemory — Markdown 文件存储
+│       ├── guide_provider/            # Batch-04
+│       │   └── file_guide_provider.py # FileGuideProvider — Markdown 解析
+│       └── context_assembler/         # Batch-05
+│           └── simple_assembler.py    # SimpleAssembler — 滑动窗口拼接
 ├── tests/                            # 测试套件
 │   ├── test_container.py             # DI 容器测试
 │   ├── test_config.py                # 配置加载器测试
@@ -117,6 +124,9 @@ harness_agent/
 │   ├── test_orchestrator.py          # 编排器测试
 │   ├── test_llm_adapter.py           # LLM 适配器测试
 │   ├── test_messaging.py             # 消息转换层测试
+│   ├── test_md_memory.py             # MdMemory 测试（Batch-03）
+│   ├── test_guide_provider.py        # FileGuideProvider 测试（Batch-04）
+│   ├── test_context_assembler.py     # SimpleAssembler 测试（Batch-05）
 │   ├── test_black_box.py             # 黑盒集成测试（含真实 API）
 │   └── test_real_llm_trace.py        # 真实 LLM 端到端 trace
 ├── examples/                         # 示例代码
@@ -211,11 +221,12 @@ python tests/test_real_llm_trace.py
 - ✅ **Batch-02**：正式接口定义（16 个 dataclass + 8 个 Protocol + 1 个 Hook 别名）
 - ✅ **Batch-02-1**：类型迁移（`_Minimal*` → 正式类型，删除桥接方法，补齐测试覆盖）
 
+- ✅ **Batch-03**：MemoryBackend 默认实现（MdMemory — Markdown 文件存储）
+- ✅ **Batch-04**：GuideProvider 默认实现（FileGuideProvider — Markdown 解析）
+- ✅ **Batch-05**：ContextAssembler 默认实现（SimpleAssembler — 滑动窗口 + 拼接）
+
 即将实现：
 
-- ⏳ Batch-03：MemoryBackend 默认实现
-- ⏳ Batch-04：GuideProvider 默认实现
-- ⏳ Batch-05：ContextAssembler 默认实现
 - ⏳ Batch-06：MCPManager 与 Tool 体系
 - ⏳ Batch-07：Sensor 默认实现
 - ⏳ Batch-09：Hook 生命周期拦截

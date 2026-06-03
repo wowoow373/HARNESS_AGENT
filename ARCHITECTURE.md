@@ -497,7 +497,7 @@ profiles/
 │   │   ├── pytest_sensor.py
 │   │   └── mypy_sensor.py
 │   ├── context/
-│   │   └── code_assembler.py # 默认 ContextAssembler 骨架
+│   │   └── simple_assembler.py # 默认 ContextAssembler 实现
 │   └── examples/
 │       └── demo_project/     # 可运行的示例
 │
