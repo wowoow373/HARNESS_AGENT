@@ -11,7 +11,7 @@
 | 01 | mvp | DI 容器 + 生命周期编排 + 配置加载 + LLM 适配器 + 组件接口占位 | 无 | `harness/core/*`, `harness/interfaces/*`, `harness/adapters/*`, `harness/config/*`, `harness/messaging/*`, `harness/di.py` |
 | 02 | interfaces | 所有组件的抽象接口 + 大包对象定义 | 01 | `harness/interfaces/*` |
 | 02-1 | interface-tests | 将 core/ 迁移为正式接口类型 + 全量接口测试 | 02 | 更新 `harness/core/*`, `harness/adapters/*`, `harness/messaging/*`; 新增 `tests/test_interfaces_*.py` |
-| 03 | memory-backend | MemoryBackend 接口 + JsonlMemory 实现 | 02-1 | `harness/components/memory_backend/` |
+| 03 | memory-backend | MemoryBackend 接口 + MdMemory 实现 | 02-1 | `harness/components/memory_backend/` |
 | 04 | guide-provider | GuideProvider 接口 + FileGuideProvider 实现 | 02-1 | `harness/components/guide_provider/` |
 | 05 | context-assembler | ContextAssembler 接口 + SimpleAssembler 实现 | 02-1, 03, 04 | `harness/components/context_assembler/` |
 | 06 | tool-mcp-manager | Tool 抽象 + ToolRegistry + MCPManager + 系统基础 Tool | 02-1 | `harness/components/tool/`, `harness/components/mcp_manager/` |
@@ -107,7 +107,7 @@
 ### 03 — memory-backend（记忆层）
 
 **范围：**
-- `JsonlMemory` 实现（追加式 JSONL + 启动时构建内存索引）
+- `MdMemory` 实现（Markdown 文件存储 + 启动时构建内存索引）
 - 接口定义移到 `harness/interfaces/memory_backend.py`（若 batch-02-1 已就绪则直接使用）
 - `read()`、`write()`、`search()`、`list_namespaces()` 完整实现
 - `search()` 至少支持简单的文本匹配（关键词/子串）

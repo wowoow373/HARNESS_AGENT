@@ -10,7 +10,7 @@
 
 | 类别 | 规则 | 示例 |
 |------|------|------|
-| 类名 | PascalCase | `ContextAssembler`, `JsonlMemory` |
+| 类名 | PascalCase | `ContextAssembler`, `MdMemory` |
 | 函数/方法名 | snake_case | `get_guides()`, `list_namespaces()` |
 | 变量名 | snake_case | `user_request`, `assembly_context` |
 | 模块文件名 | snake_case | `input_adapter.py`, `memory_backend.py` |
@@ -72,16 +72,16 @@ class ToolExecutionError(HarnessError):
 - 构造函数参数：必须在 docstring 中注释
 
 ```python
-class JsonlMemory:
-    """MemoryBackend 的 JSONL 文件存储实现。
+class MdMemory:
+    """MemoryBackend 的 Markdown 文件存储实现。
 
-    追加式写入，每行一条 JSON 记录。
+    每个记忆项一个 .md 文件，YAML frontmatter + Markdown 正文。
     """
     def __init__(self, path: str):
         """初始化。
 
         Args:
-            path: JSONL 文件路径，不存在时自动创建。
+            path: 记忆库根目录路径，不存在时自动创建。
         """
 ```
 
@@ -122,7 +122,7 @@ class JsonlMemory:
 
 ```python
 # 正确：构造函数注入 + 预构造实例注册
-memory = JsonlMemory(path="./memory.jsonl")
+memory = MdMemory(path="./memory")
 assembler = SimpleAssembler(memory=memory)
 
 class SimpleAssembler:
@@ -130,10 +130,10 @@ class SimpleAssembler:
         self.memory = memory
 
 # 错误：在组件内部直接引用具体实现
-from harness.components.memory_backend.jsonl_memory import JsonlMemory
+from harness.components.memory_backend.md_memory import MdMemory
 class SimpleAssembler:
     def __init__(self):
-        self.memory = JsonlMemory("./memory.jsonl")
+        self.memory = MdMemory("./memory")
 ```
 
 ---
@@ -141,5 +141,5 @@ class SimpleAssembler:
 ## 五、Git 提交约定
 
 - 提交信息格式：`batch-XX: <what was done>`
-- 示例：`batch-03: implement JsonlMemory with read/write/search`
+- 示例：`batch-03: implement MdMemory with read/write/search/list_namespaces`
 - 批次完成后提交，作为一个独立的 commit

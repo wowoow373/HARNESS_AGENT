@@ -26,7 +26,7 @@ class MemoryBackend(Protocol):
     - sensor_raw: Sensor 原始评估
     - system: 系统状态缓存
 
-    实现示例：JsonlMemory — 追加式 JSONL 文件存储，启动时构建内存索引
+    实现示例：MdMemory — 基于 Markdown 文件的记忆存储，每个记忆项一个 .md 文件
     """
 
     def read(self, key: str, namespace: str) -> Optional[Any]:

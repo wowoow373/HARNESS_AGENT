@@ -109,7 +109,7 @@ harness/components/
 │   └── simple_assembler.py       # SimpleAssembler（默认实现，构造注入 MemoryBackend）
 ├── memory_backend/
 │   ├── __init__.py
-│   └── jsonl_memory.py           # JsonlMemory（默认实现，启动时构建内存索引）
+│   └── md_memory.py              # MdMemory（默认实现，启动时构建内存索引）
 ├── sensor/
 │   ├── __init__.py
 │   └── logging_sensor.py         # LoggingSensor（默认实现，构造注入 MemoryBackend）
@@ -166,7 +166,7 @@ tests/
 ├── test_input_adapter.py
 ├── test_guide_provider.py
 ├── test_context_assembler.py
-├── test_memory_backend.py
+├── test_md_memory.py
 ├── test_sensor.py
 ├── test_tool_registry.py
 ├── test_mcp_manager.py
@@ -233,7 +233,7 @@ harness/components/            ← 可以 import interfaces/，可以 import hoo
 | 类别 | 命名规则 | 示例 |
 |------|---------|------|
 | 接口文件 | `snake_case.py`，与接口名对应 | `input_adapter.py` |
-| 实现文件 | `snake_case.py`，体现实现方式 | `cli_adapter.py`, `jsonl_memory.py` |
+| 实现文件 | `snake_case.py`，体现实现方式 | `cli_adapter.py`, `md_memory.py` |
 | 测试文件 | `test_<component>.py` | `test_input_adapter.py` |
 | 大包对象 | 单文件集中定义 | `interfaces/types.py` |
 | \_\_init\_\_.py | 导出公开接口，不写逻辑 | `from .cli_adapter import CliAdapter` |

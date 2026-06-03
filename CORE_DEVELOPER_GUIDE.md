@@ -580,7 +580,7 @@ guide = FileGuideProvider("AGENTS.md")
 container.register(GuideProvider, guide)
 
 # 同一个实例可以注册到多个接口（如 MemoryBackend 被多处共享）
-memory = JsonlMemory("./memory.jsonl")
+memory = MdMemory("./memory")
 container.register(MemoryBackend, memory)
 assembler = SimpleAssembler(memory=memory)
 container.register(ContextAssembler, assembler)
@@ -901,45 +901,131 @@ if your_comp:
 ### 11.4 实现 MemoryBackend 示例
 
 ```python
-# harness/components/memory_backend/jsonl_memory.py
-import json
+# harness/components/memory_backend/md_memory.py
 import os
-from typing import Any, List, Optional
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-class JsonlMemory:
-    """JSONL 文件存储的 MemoryBackend 实现。"""
+from harness.interfaces.types import MemoryItem
 
-    def __init__(self, path: str):
-        self.path = path
-        self._index: dict = {}
-        self._load()
 
-    def _load(self):
-        if os.path.exists(self.path):
-            with open(self.path) as f:
-                for line in f:
-                    item = json.loads(line)
-                    self._index[f"{item['namespace']}:{item['key']}"] = item
+class MdMemory:
+    """Markdown 文件存储的 MemoryBackend 实现。
+
+    每个记忆项一个 .md 文件，使用 YAML frontmatter + Markdown 正文。
+    """
+
+    def __init__(self, path: str = "~/.harness/memory"):
+        self._root = Path(path).expanduser().resolve()
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._index: Dict[str, Dict[str, MemoryItem]] = {}
+        self._build_index()
+
+    def _build_index(self):
+        """启动时扫描所有 .md 文件构建内存索引。"""
+        for ns_dir in self._root.iterdir():
+            if not ns_dir.is_dir():
+                continue
+            namespace = ns_dir.name
+            self._index.setdefault(namespace, {})
+            for md_file in ns_dir.glob("*.md"):
+                if md_file.name == "MEMORY.md":
+                    continue
+                try:
+                    item = self._read_md_file(md_file)
+                    if item:
+                        self._index[namespace][item.key] = item
+                except Exception:
+                    pass  # 跳过解析失败的文件
 
     def read(self, key: str, namespace: str) -> Optional[Any]:
-        item = self._index.get(f"{namespace}:{key}")
-        return item["value"] if item else None
+        ns_items = self._index.get(namespace, {})
+        item = ns_items.get(key)
+        return item.value if item else None
 
     def write(self, key: str, value: Any, namespace: str) -> None:
-        item = {"key": key, "value": value, "namespace": namespace}
-        self._index[f"{namespace}:{key}"] = item
-        with open(self.path, "a") as f:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        value_str = str(value)
+        ts = time.time()
+        item = MemoryItem(
+            key=key, value=value_str, namespace=namespace, timestamp=ts
+        )
+        # 确保 namespace 条目存在
+        self._index.setdefault(namespace, {})[key] = item
+        # 写入 .md 文件
+        ns_dir = self._root / namespace
+        ns_dir.mkdir(exist_ok=True)
+        self._write_md_file(ns_dir / f"{key}.md", item)
 
-    def search(self, query: str, namespace: str, limit: int = 10) -> list:
+    def search(self, query: str, namespace: str, limit: int = 10) -> List[MemoryItem]:
+        if not query or namespace not in self._index:
+            return []
+        q = query.lower()
         results = [
-            v for k, v in self._index.items()
-            if k.startswith(f"{namespace}:") and query.lower() in str(v).lower()
+            item for item in self._index[namespace].values()
+            if q in item.key.lower() or q in str(item.value).lower()
         ]
+        results.sort(key=lambda x: x.timestamp, reverse=True)
         return results[:limit]
 
     def list_namespaces(self) -> List[str]:
-        return list(set(k.split(":")[0] for k in self._index.keys()))
+        return list(self._index.keys())
+
+    def _read_md_file(self, filepath: Path) -> Optional[MemoryItem]:
+        """解析 .md 文件，返回 MemoryItem。"""
+        text = filepath.read_text(encoding="utf-8")
+        fm, body = self._parse_frontmatter(text)
+        if not fm.get("key"):
+            return None
+        return MemoryItem(
+            key=fm["key"],
+            value=body.strip(),
+            namespace=fm.get("namespace", ""),
+            timestamp=float(fm.get("timestamp", 0)),
+            metadata=fm.get("metadata", {}),
+        )
+
+    def _write_md_file(self, filepath: Path, item: MemoryItem):
+        """写入 .md 记忆文件。"""
+        lines = [
+            "---",
+            f"key: {item.key}",
+            f"namespace: {item.namespace}",
+            f"timestamp: {item.timestamp}",
+        ]
+        if item.metadata:
+            lines.append("metadata:")
+            for mk, mv in item.metadata.items():
+                lines.append(f"  {mk}: {mv}")
+        lines.append("---")
+        lines.append("")
+        lines.append(str(item.value))
+        filepath.write_text("\n".join(lines), encoding="utf-8")
+
+    def _parse_frontmatter(self, text: str) -> tuple:
+        """简单 YAML frontmatter 解析器（不引入 pyyaml 依赖）。"""
+        if not text.startswith("---"):
+            return {}, text
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            return {}, text
+        fm_text = parts[1].strip()
+        body = parts[2].strip()
+        fm: Dict[str, Any] = {}
+        current_key = None
+        for line in fm_text.split("\n"):
+            if not line.strip():
+                continue
+            if line.startswith("  ") and current_key == "metadata":
+                if ":" in line:
+                    mk, _, mv = line.strip().partition(": ")
+                    fm.setdefault("metadata", {})[mk] = mv
+                continue
+            if ":" in line:
+                k, _, v = line.partition(": ")
+                fm[k.strip()] = v.strip()
+                current_key = k.strip()
+        return fm, body
 ```
 
 ---
@@ -1020,7 +1106,7 @@ A: Core 采用 duck typing 模式。编排器只关心你的对象有没有对�
 A: 创建同一个实例，注册到不同接口：
 
 ```python
-memory = JsonlMemory("./memory.jsonl")
+memory = MdMemory("./memory")
 container.register(MemoryBackend, memory)
 # Sensor 通过构造函数注入同一个 memory 实例
 sensor = LoggingSensor(memory=memory)

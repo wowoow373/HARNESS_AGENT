@@ -209,7 +209,7 @@ list_namespaces() → List[str]
 | system | 系统状态缓存 | Framework | 框架内部 |
 
 **实现示例**：
-- **JsonlMemory**：追加式 JSONL 文件存储，启动时构建内存索引，简单可审计
+- **MdMemory**：基于 Markdown 文件的记忆存储，每个记忆项一个 `.md` 文件，简单可审计
 
 ---
 
@@ -446,7 +446,7 @@ DI 容器采用**预构造实例注册**模式：用户创建组件实例并手�
 
 ```python
 # 1. 创建共享基础设施（同一个 MemoryBackend 实例）
-memory = JsonlMemory(path="./memory.jsonl")
+memory = MdMemory(path="./memory")
 
 # 2. 创建组件实例（构造函数注入依赖）
 input_adapter = CliAdapter()

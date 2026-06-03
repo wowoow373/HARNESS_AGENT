@@ -21,7 +21,7 @@ class DIContainer:
     用法::
 
         container = DIContainer()
-        memory = JsonlMemory(path="./memory.jsonl")
+        memory = MdMemory(path="./memory")
         container.register(MemoryBackend, memory)
         # ...
         resolved = container.resolve(MemoryBackend)  # → memory
