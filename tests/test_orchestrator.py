@@ -13,7 +13,7 @@ from harness.core.orchestrator import (
     LifecycleOrchestrator,
     MemoryBackend,
     Sensor,
-    ToolRegistry,
+    SystemToolProvider,
 )
 from harness.interfaces.types import (
     AssemblyContext,
@@ -477,11 +477,11 @@ class TestPhaseLoop:
         """tool_use 循环（纯 tool_use → tool result → LLM again → text）。"""
         container = self._setup_container_with_adapter()
 
-        class MockToolRegistry:
+        class MockSystemToolProvider:
             def __init__(self):
                 self.executed = []
 
-            def list_tools(self):
+            def get_tools(self):
                 return [
                     ToolDefinition(
                         name="read",
@@ -500,7 +500,7 @@ class TestPhaseLoop:
 
                 return TR()
 
-        container.register(ToolRegistry, MockToolRegistry())
+        container.register(SystemToolProvider, MockSystemToolProvider())
 
         call_count = [0]
 
@@ -525,9 +525,9 @@ class TestPhaseLoop:
         ctx = orch._phase_init()
         orch._phase_loop(ctx)
 
-        tr = container.resolve(ToolRegistry)
-        assert len(tr.executed) == 1
-        assert tr.executed[0] == ("read", {"path": "/tmp/x"})
+        stp = container.resolve(SystemToolProvider)
+        assert len(stp.executed) == 1
+        assert stp.executed[0] == ("read", {"path": "/tmp/x"})
         assert call_count[0] == 2
         assert len(orch._tool_call_records) == 1
         assert orch._tool_call_records[0].tool_name == "read"
@@ -537,12 +537,18 @@ class TestPhaseLoop:
         """text + tool_uses 共存场景。"""
         container = self._setup_container_with_adapter()
 
-        class MockToolRegistry:
+        class MockSystemToolProvider:
             def __init__(self):
                 self.executed = []
 
-            def list_tools(self):
-                return []
+            def get_tools(self):
+                return [
+                    ToolDefinition(
+                        name="read",
+                        description="Read a file",
+                        parameters={},
+                    )
+                ]
 
             def execute(self, name, args):
                 self.executed.append((name, args))
@@ -554,7 +560,7 @@ class TestPhaseLoop:
 
                 return TR()
 
-        container.register(ToolRegistry, MockToolRegistry())
+        container.register(SystemToolProvider, MockSystemToolProvider())
 
         def coexistence_llm(msgs, tools):
             return Response(
@@ -574,8 +580,8 @@ class TestPhaseLoop:
         ctx = orch._phase_init()
         orch._phase_loop(ctx)
 
-        tr = container.resolve(ToolRegistry)
-        assert len(tr.executed) == 1
+        stp = container.resolve(SystemToolProvider)
+        assert len(stp.executed) == 1
 
         adapter = container.resolve(InputAdapter)
         assert any("Let me check" in str(o) for o in adapter.outputs)
@@ -588,12 +594,18 @@ class TestPhaseLoop:
         """Tool 执行失败时错误被完整记录。"""
         container = self._setup_container_with_adapter(inputs=["do something", ""])
 
-        class FailingToolRegistry:
+        class FailingSystemToolProvider:
             def __init__(self):
                 self.executed = []
 
-            def list_tools(self):
-                return []
+            def get_tools(self):
+                return [
+                    ToolDefinition(
+                        name="write",
+                        description="Write to a file",
+                        parameters={},
+                    )
+                ]
 
             def execute(self, name, args):
                 self.executed.append((name, args))
@@ -605,7 +617,7 @@ class TestPhaseLoop:
 
                 return TR()
 
-        container.register(ToolRegistry, FailingToolRegistry())
+        container.register(SystemToolProvider, FailingSystemToolProvider())
 
         # LLM: tool call → tool result (error) → LLM again → text
         call_count = [0]
@@ -668,8 +680,8 @@ class TestPhaseLoop:
         # 应该不崩溃，只是跳过 LLM 调用
         orch._phase_loop(ctx)
 
-    def test_tool_registry_not_registered_handled(self):
-        """ToolRegistry 未注册时 tool_use 不崩溃。"""
+    def test_tool_router_empty_handled(self):
+        """ToolRouter 无工具时 tool_use 不崩溃（记录错误）。"""
         container = self._setup_container_with_adapter()
 
         call_count = [0]
@@ -693,7 +705,7 @@ class TestPhaseLoop:
         orch._cached_tools = []
 
         ctx = orch._phase_init()
-        # 不应崩溃：tool_use 检测到 ToolRegistry 缺失，记录错误
+        # 不应崩溃：tool_use 检测到 ToolRouter 中无此工具，记录错误
         orch._phase_loop(ctx)
         # tool_call_records 中应有带 error 的记录
         if orch._tool_call_records:
@@ -846,8 +858,8 @@ class TestRun:
                     ))
                 return msgs
 
-        class MockToolRegistry:
-            def list_tools(self):
+        class MockSystemToolProvider:
+            def get_tools(self):
                 return []
 
             def execute(self, name, args):
@@ -871,7 +883,7 @@ class TestRun:
         container.register(GuideProvider, MockGuideProvider())
         container.register(MemoryBackend, MockMemory())
         container.register(ContextAssembler, MockAssembler())
-        container.register(ToolRegistry, MockToolRegistry())
+        container.register(SystemToolProvider, MockSystemToolProvider())
         container.register(Sensor, MockSensor())
 
         def mock_llm(msgs, tools):
@@ -1010,7 +1022,7 @@ class TestContextAssemblerCallCount:
         """搭建含 tool_use 循环和 spy ContextAssembler 的测试环境。"""
         from harness.core.container import DIContainer
         from harness.core.orchestrator import (
-            InputAdapter, ToolRegistry, ContextAssembler,
+            InputAdapter, SystemToolProvider, ContextAssembler,
         )
         from harness.interfaces.types import (
             UserRequest, GuidesBundle,
@@ -1045,10 +1057,10 @@ class TestContextAssemblerCallCount:
                 self.call_count += 1
                 return [{"role": "user", "content": ctx.user_request.text or ""}]
 
-        class MockToolRegistry:
+        class MockSystemToolProvider:
             call_count = [0]
 
-            def list_tools(self):
+            def get_tools(self):
                 return [ToolDefinition(name="test_tool", description="A test tool")]
 
             def execute(self, name, args):
@@ -1059,7 +1071,7 @@ class TestContextAssemblerCallCount:
                 return TR()
 
         container.register(InputAdapter, MockAdapter())
-        container.register(ToolRegistry, MockToolRegistry())
+        container.register(SystemToolProvider, MockSystemToolProvider())
 
         call_count = [0]
 

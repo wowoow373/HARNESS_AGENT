@@ -91,7 +91,7 @@ class ToolCallFunction:
 
 @dataclass
 class ToolDefinition:
-    """Tool 的元信息，用于 LLM 的 tool schema 生成和 ToolRegistry 发现。
+    """Tool 的元信息，用于 LLM 的 tool schema 生成和 ToolRouter 发现。
 
     Attributes:
         name: 工具名称。
@@ -115,6 +115,30 @@ class ToolResult:
     success: bool = True
     content: Any = None
     error: Optional[str] = None
+
+
+@dataclass
+class ToolTransform:
+    """单个 MCP 工具的转换声明。
+
+    用于声明式配置 MCP 工具的转换行为：重命名、隐藏、注入默认参数等。
+    当声明式不够用时，可通过 MCPHandler 实现程序化转换。
+
+    Attributes:
+        expose_as: 对外暴露的名称（None 表示使用原始名称）。
+        description_override: 覆盖工具描述（None 表示使用原始描述）。
+        hidden: 是否对 LLM 隐藏（True 时工具不可见但内部可执行）。
+        arg_defaults: 注入的默认参数（合并到 LLM 传入的参数中，LLM 值优先）。
+        arg_transform: 高级程序化参数转换（可选 Callable）。
+        result_transform: 高级程序化结果转换（可选 Callable）。
+    """
+
+    expose_as: Optional[str] = None
+    description_override: Optional[str] = None
+    hidden: bool = False
+    arg_defaults: Dict[str, Any] = field(default_factory=dict)
+    arg_transform: Optional[Any] = None  # Callable[[Dict], Dict]
+    result_transform: Optional[Any] = None  # Callable[[Any], Any]
 
 
 @dataclass
@@ -249,7 +273,7 @@ class AssemblyContext:
     Attributes:
         user_request: 当前用户请求。
         guides: 来自 GuideProvider 的指导集。
-        available_tools: 来自 ToolRegistry 的可用工具定义列表。
+        available_tools: 来自 ToolRouter 的可用工具定义列表。
         history: 当前会话的对话历史。
         memories: 从 MemoryBackend 检索的记忆。
         system_state: 系统当前状态。
@@ -298,6 +322,7 @@ __all__ = [
     "ToolCallFunction",
     "ToolDefinition",
     "ToolResult",
+    "ToolTransform",
     "MemoryItem",
     "Message",
     "UserRequest",

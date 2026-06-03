@@ -55,7 +55,7 @@ from harness.core.orchestrator import (
     ContextAssembler,
     GuideProvider,
     MemoryBackend,
-    ToolRegistry,
+    SystemToolProvider,
     LifecycleOrchestrator,
 )
 from harness.interfaces.types import (

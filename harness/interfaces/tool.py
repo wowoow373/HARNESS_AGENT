@@ -1,7 +1,15 @@
-"""Tool 接口 — 工具的实际执行层。
+"""Tool 接口 — 单个工具的抽象契约。
 
-Tool 被 ToolRegistry 统一调度。用户不直接实现 Tool 接口，
-通过 MCPManager 间接注入。
+Tool 定义单个工具的元信息描述和执行逻辑。
+ToolProvider（SystemToolProvider / MCPAdapter）管理 Tool 集合，
+ToolRouter（框架内部）合并多个 Provider 并统一路由分发。
+
+用户通常不直接实现 Tool 接口，而是：
+- 使用 BaseTool 基类或 @inline_tool 装饰器创建 Tool 实例
+- 将 Tool 实例注册到 DefaultSystemToolProvider
+- 或通过 DefaultMCPAdapter 消费外部 MCP Server
+
+Tool 接口本身是稳定的核心契约，不随架构演进而变化。
 """
 
 from typing import Any, Dict, Protocol, runtime_checkable
@@ -14,10 +22,10 @@ class Tool(Protocol):
     """工具执行接口。
 
     每个 Tool 实例提供自身的元信息描述和具体的执行逻辑。
-    ToolRegistry 通过此接口统一管理所有工具的发现与调度。
+    ToolRouter 通过 ToolProvider 间接调度 Tool 实例。
 
     调用时机：
-    - get_definition()：会话初始化阶段（ToolRegistry 收集工具元信息）
+    - get_definition()：会话初始化阶段（ToolProvider 收集工具元信息）
     - execute()：运行时（LLM 请求执行工具时）
     """
 

@@ -945,8 +945,8 @@ class TestComponentOptionality:
         """ContextAssembler missing → uses built-in fallback, no crash (§3.3)."""
         self._run(base_container)
 
-    def test_tool_registry_is_optional(self, base_container):
-        """ToolRegistry missing → no crash (§3.3)."""
+    def test_system_tool_provider_is_optional(self, base_container):
+        """SystemToolProvider missing → no crash (§3.3)."""
         self._run(base_container)
 
     def test_sensor_is_optional(self, base_container):
@@ -1261,20 +1261,19 @@ class TestContextAssemblerIntegration:
 
 
 # ============================================================================
-# 11. ToolRegistry / Sensor / GuideProvider Interface Tests
+# 11. SystemToolProvider / Sensor / GuideProvider Interface Tests
 # ============================================================================
 
 
-class TestToolRegistryDuckTyping:
-    """Test duck-typing behavior for ToolRegistry per §4.5."""
+class TestSystemToolProviderDuckTyping:
+    """Test duck-typing behavior for SystemToolProvider per §4.5."""
 
     def test_execute_success_result(self):
         """execute() returning object with success/content/error works."""
-        class MyRegistry:
-            def register(self, tool):
+        class MyProvider:
+            def get_tools(self):
                 pass
-            def list_tools(self):
-                return []
+            
             def execute(self, name, args):
                 class R:
                     pass
@@ -1284,18 +1283,17 @@ class TestToolRegistryDuckTyping:
                 r.error = None
                 return r
 
-        result = MyRegistry().execute("test", {})
+        result = MyProvider().execute("test", {})
         assert result.success == True
         assert result.content == "done"
         assert result.error is None
 
     def test_execute_failure_result(self):
         """execute() failure sets success=False and error string."""
-        class MyRegistry:
-            def register(self, tool):
+        class MyProvider:
+            def get_tools(self):
                 pass
-            def list_tools(self):
-                return []
+            
             def execute(self, name, args):
                 class R:
                     pass
@@ -1305,7 +1303,7 @@ class TestToolRegistryDuckTyping:
                 r.error = "Tool not found"
                 return r
 
-        result = MyRegistry().execute("bad", {})
+        result = MyProvider().execute("bad", {})
         assert result.success == False
         assert result.error == "Tool not found"
 

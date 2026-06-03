@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .container import DIContainer
 from .exceptions import ComponentNotRegisteredError, OrchestratorError
+from .tool_router import ToolRouter
 from ..interfaces.types import (
     AssemblyContext,
     GuidesBundle,
@@ -33,12 +34,11 @@ from ..interfaces import (
     ContextAssembler,
     GuideProvider,
     InputAdapter,
+    MCPAdapter,
     MemoryBackend,
     Sensor,
-    ToolRegistry,
+    SystemToolProvider,
 )
-# 预留（后续 batch 启用）：
-# from ..interfaces import MCPManager, Tool
 from ..messaging import (
     build_assistant_message,
     build_tool_result_message,
@@ -99,7 +99,7 @@ class LifecycleOrchestrator:
         # 阶段一缓存的不可变数据
         self._cached_guides: Optional[GuidesBundle] = None
         self._cached_tools: List[ToolDefinition] = []
-        self._cached_tool_registry: Optional[Any] = None  # 避免 phase_init/loop 重复 resolve
+        self._cached_tool_router: Optional[ToolRouter] = None  # 避免 phase_init/loop 重复创建
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -140,7 +140,7 @@ class LifecycleOrchestrator:
         1. resolve InputAdapter → receive() → UserRequest
         2. resolve GuideProvider → get_guides() → GuidesBundle（缓存）
         3. resolve MemoryBackend → search() → List[MemoryItem]
-        4. resolve ToolRegistry → list_tools() → List[ToolDefinition]（缓存）
+        4. create ToolRouter → resolve SystemToolProvider/MCPAdapter → list_tools() → List[ToolDefinition]（缓存）
         5. 构建并返回 AssemblyContext
 
         Returns:
@@ -186,16 +186,40 @@ class LifecycleOrchestrator:
             except Exception as e:
                 logger.warning(f"MemoryBackend.search() failed: {e}")
 
-        # 4. ToolRegistry（可选，缓存引用供 _phase_loop 使用）
+        # 4. ToolRouter（框架内部，非 DI）— 合并 SystemToolProvider + MCPAdapter
         available_tools: List[ToolDefinition] = []
-        tool_registry = self._resolve_optional(ToolRegistry)
-        self._cached_tool_registry = tool_registry
-        if tool_registry:
+        tool_router = ToolRouter()
+
+        # 4a. SystemToolProvider（可选）
+        sys_provider = self._resolve_optional(SystemToolProvider)
+        if sys_provider:
             try:
-                available_tools = tool_registry.list_tools()
-                logger.debug(f"Available tools: {len(available_tools)}")
+                tool_router.register_provider(sys_provider)
+                logger.debug(
+                    f"SystemToolProvider registered: "
+                    f"{type(sys_provider).__name__}"
+                )
             except Exception as e:
-                logger.warning(f"ToolRegistry.list_tools() failed: {e}")
+                logger.warning(f"SystemToolProvider registration failed: {e}")
+
+        # 4b. MCPAdapter（可选 — 不注册即裁切）
+        mcp_adapter = self._resolve_optional(MCPAdapter)
+        if mcp_adapter:
+            try:
+                tool_router.register_provider(mcp_adapter)
+                logger.debug(
+                    f"MCPAdapter registered: {type(mcp_adapter).__name__}"
+                )
+            except Exception as e:
+                logger.warning(f"MCPAdapter registration failed: {e}")
+
+        try:
+            available_tools = tool_router.list_tools()
+            logger.debug(f"Available tools: {len(available_tools)}")
+        except Exception as e:
+            logger.warning(f"ToolRouter.list_tools() failed: {e}")
+
+        self._cached_tool_router = tool_router
         self._cached_tools = available_tools
 
         # 5. 构建 AssemblyContext
@@ -224,7 +248,7 @@ class LifecycleOrchestrator:
         内层循环（同一轮内 tool_use 连续生成）：
           3. self.call_llm(messages, tools) → Response
           4. 处理 Response（text 和 tool_uses 可共存）：
-             a. 如有 tool_uses → 每个 tool 经 ToolRegistry 串行执行
+             a. 如有 tool_uses → 每个 tool 经 ToolRouter 查表分发执行
                 → tool_use + tool_result 追加到 messages
              b. 如有 text → InputAdapter.send(response) → 跳出内层循环
              c. 如仅有 tool_uses 无 text → 回到步骤 3
@@ -240,7 +264,7 @@ class LifecycleOrchestrator:
         ctx = initial_ctx
         assembler = self._resolve_optional(ContextAssembler)
         adapter = self.container.resolve(InputAdapter)
-        tool_registry = self._cached_tool_registry
+        tool_router = self._cached_tool_router
 
         # 外层循环 — 每轮用户输入触发一次
         while not self._should_exit_flag:
@@ -298,14 +322,14 @@ class LifecycleOrchestrator:
                             after_ts = time.time()
                         else:
                             try:
-                                if tool_registry:
-                                    result = tool_registry.execute(
+                                if tool_router and tool_router.has_tool(tc.function.name):
+                                    result = tool_router.execute(
                                         tc.function.name, args
                                     )
                                 else:
                                     error = (
-                                        f"ToolRegistry not registered, "
-                                        f"cannot execute tool '{tc.function.name}'"
+                                        f"ToolRouter has no tool '{tc.function.name}'. "
+                                        f"Available: {sorted(tool_router._routes.keys()) if tool_router else 'none'}"
                                     )
                             except Exception as e:
                                 error = str(e)
@@ -391,7 +415,7 @@ class LifecycleOrchestrator:
         Args:
             trajectory: run() 中组装好的完整执行轨迹。
 
-        Sensor.sense(trajectory) → 清理内部状态。
+        Sensor.sense(trajectory) → ToolRouter.shutdown()（清理 MCP 子进程等资源）→ 清理内部状态。
         """
         logger.info("Phase 3: Session end starting")
 
@@ -404,7 +428,15 @@ class LifecycleOrchestrator:
             except Exception as e:
                 logger.warning(f"Sensor.sense() failed: {e}")
 
-        # 2. 清理内部状态
+        # 2. ToolRouter shutdown（统一清理，分发到各 Provider）
+        if self._cached_tool_router:
+            try:
+                self._cached_tool_router.shutdown()
+                logger.debug("ToolRouter.shutdown() completed")
+            except Exception as e:
+                logger.warning(f"ToolRouter.shutdown() failed: {e}")
+
+        # 3. 清理内部状态
         self._history.clear()
         self._tool_call_records.clear()
         self._should_exit_flag = False
