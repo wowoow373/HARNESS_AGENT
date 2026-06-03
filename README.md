@@ -13,7 +13,7 @@
 - **三阶段生命周期** — 会话初始化 → 多轮对话循环 → 会话结束，控制流清晰固定
 - **零依赖 LLM 适配器** — 内置 OpenAI 兼容 HTTP 客户端，自动从 `.env` / 环境变量读取配置
 - **Duck Typing 组件** — 不强制继承基类，有对应方法就能工作
-- **完整的类型与异常体系** — 16 个正式 dataclass + 8 个 Protocol + Hook 类型别名 + 完善的异常层次
+- **完整的类型与异常体系** — 17 个正式 dataclass + 9 个 Protocol + Hook 类型别名 + 完善的异常层次
 
 ---
 
@@ -91,16 +91,17 @@ harness_agent/
 │   │   ├── config.py                 # 配置模型
 │   │   └── llm_adapter.py            # re-export 包装（指向 adapters/）
 │   ├── interfaces/                   # 接口与类型定义（正式来源）
-│   │   ├── __init__.py               # 导出 16 类型 + 9 接口
-│   │   ├── types.py                  # 16 个正式 dataclass
+│   │   ├── __init__.py               # 导出 17 类型 + 10 接口
+│   │   ├── types.py                  # 17 个正式 dataclass
 │   │   ├── input_adapter.py          # InputAdapter Protocol
 │   │   ├── guide_provider.py         # GuideProvider Protocol
 │   │   ├── context_assembler.py      # ContextAssembler Protocol
 │   │   ├── memory_backend.py         # MemoryBackend Protocol
 │   │   ├── sensor.py                 # Sensor Protocol
 │   │   ├── tool.py                   # Tool Protocol
-│   │   ├── tool_registry.py          # ToolRegistry Protocol
-│   │   ├── mcp_manager.py            # MCPManager Protocol
+│   │   ├── system_tool_provider.py   # SystemToolProvider Protocol
+│   │   ├── mcp_adapter.py            # MCPAdapter Protocol
+│   │   ├── mcp_handler.py            # MCPHandler Protocol
 │   │   └── hook.py                   # Hook 类型别名 + HookContext
 │   ├── adapters/                     # 外部系统适配器
 │   │   └── llm_adapter.py            # MinimalLLMAdapter（OpenAI 兼容）
@@ -115,8 +116,16 @@ harness_agent/
 │       │   └── md_memory.py           # MdMemory — Markdown 文件存储
 │       ├── guide_provider/            # Batch-04
 │       │   └── file_guide_provider.py # FileGuideProvider — Markdown 解析
-│       └── context_assembler/         # Batch-05
-│           └── simple_assembler.py    # SimpleAssembler — 滑动窗口拼接
+│       ├── context_assembler/         # Batch-05
+│       │   └── simple_assembler.py    # SimpleAssembler — 滑动窗口拼接
+│       ├── tool/                      # Batch-06
+│       │   ├── base.py               # BaseTool ABC
+│       │   ├── inline_tool.py        # @inline_tool 装饰器
+│       │   ├── system_tools.py       # ReadFileTool / WriteFileTool / ShellTool
+│       │   └── default_system_tool_provider.py
+│       └── mcp_manager/              # Batch-06
+│           ├── mcp_client.py         # MCPClient (JSON-RPC stdio)
+│           └── default_mcp_adapter.py # DefaultMCPAdapter
 ├── tests/                            # 测试套件
 │   ├── test_container.py             # DI 容器测试
 │   ├── test_config.py                # 配置加载器测试
@@ -153,9 +162,10 @@ harness_agent/
 | **GuideProvider** | 前馈控制：行动前提供身份定义与行为规则 | ❌ 否 |
 | **ContextAssembler** | 上下文工程：将所有信息源组装成发给 LLM 的消息列表 | ❌ 否（强烈推荐） |
 | **MemoryBackend** | 记忆层：跨会话持久化存储与检索 | ❌ 否 |
-| **ToolRegistry** | 工具注册与调度执行 | ❌ 否 |
+| **ToolRouter** | 工具路由：合并 SystemToolProvider 和 MCPAdapter，按名分发执行（框架内部） | 框架内部 |
+| **SystemToolProvider** | 系统工具提供者：管理本地 Tool 集合 | ❌ 否 |
+| **MCPAdapter** | MCP 适配层：消费外部 MCP Server，经转换后暴露工具 | ❌ 否 |
 | **Sensor** | 反馈控制：会话结束时评估轨迹并沉淀知识 | ❌ 否 |
-| **MCPManager** | MCP 配置入口：将用户 MCP 配置转换为框架 Tool | ❌ 否 |
 | **Hook** | 生命周期拦截：在 11 个关键节点插入自定义逻辑 | ❌ 否 |
 
 > 详细接口契约与数据结构设计，请参阅 [ARCHITECTURE.md](ARCHITECTURE.md)。
@@ -167,16 +177,17 @@ harness_agent/
 ```
 阶段一：会话初始化（整个会话只执行一次）
   InputAdapter.receive() → GuideProvider → MemoryBackend.search()
-  → ToolRegistry.list_tools() → 组装 AssemblyContext
+  → ToolRouter 注册 SystemToolProvider + MCPAdapter → 组装 AssemblyContext
 
 阶段二：多轮对话循环
   外层循环（每轮用户输入）:
     ContextAssembler.assemble() → before_llm_call Hook
-    → 内层循环（tool 连续调用）: LLM → ToolRegistry.execute()
+    → 内层循环（tool 连续调用）: LLM → ToolRouter.execute()
     → InputAdapter.send() → InputAdapter.receive()
 
 阶段三：会话结束（整个会话只执行一次）
-  组装 Trajectory → Sensor.sense() → 清理
+  组装 Trajectory → on_session_end Hook → Sensor.sense()
+  → after_sensor Hook → ToolRouter.shutdown() → 清理
 ```
 
 > 完整数据流与调用时机，请参阅 [CORE_DEVELOPER_GUIDE.md](CORE_DEVELOPER_GUIDE.md)。
@@ -218,17 +229,17 @@ python tests/test_real_llm_trace.py
 当前已完成的批次：
 
 - ✅ **Batch-01**：内核 MVP（DI 容器、三阶段编排器、配置加载器、LLM 适配器、异常体系、消息构造）
-- ✅ **Batch-02**：正式接口定义（16 个 dataclass + 8 个 Protocol + 1 个 Hook 别名）
+- ✅ **Batch-02**：正式接口定义（17 个 dataclass + 9 个 Protocol + 1 个 Hook 别名）
 - ✅ **Batch-02-1**：类型迁移（`_Minimal*` → 正式类型，删除桥接方法，补齐测试覆盖）
-
 - ✅ **Batch-03**：MemoryBackend 默认实现（MdMemory — Markdown 文件存储）
 - ✅ **Batch-04**：GuideProvider 默认实现（FileGuideProvider — Markdown 解析）
 - ✅ **Batch-05**：ContextAssembler 默认实现（SimpleAssembler — 滑动窗口 + 拼接）
+- ✅ **Batch-06**：Tool 与 MCP 体系（ToolRouter + SystemToolProvider + MCPAdapter + MCPHandler）
 
 即将实现：
 
-- ⏳ Batch-06：MCPManager 与 Tool 体系
 - ⏳ Batch-07：Sensor 默认实现
+- ⏳ Batch-08：InputAdapter 默认实现
 - ⏳ Batch-09：Hook 生命周期拦截
 - ⏳ Batch-10：完整 DI 装配方案
 

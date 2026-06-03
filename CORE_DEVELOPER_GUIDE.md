@@ -33,7 +33,7 @@ Harness 是一个 **模块化 Agent 框架**。它提供：
 1. **按固定顺序调度组件** — 三阶段生命周期（初始化 → 对话循环 → 结束）
 2. **管理组件注册与解析** — 预构造实例的 DI 容器
 3. **开箱即用的 LLM 适配器** — 零依赖 OpenAI 兼容 HTTP 客户端
-4. **完整的数据类型体系** — 16 个 dataclass + 8 个 Protocol + Hook 类型别名
+4. **完整的数据类型体系** — 17 个 dataclass + 9 个 Protocol + Hook 类型别名
 5. **消息格式转换层** — 框架类型 ↔ OpenAI dict 双向转换
 
 框架**不包含**任何业务逻辑。你的 Agent 具体做什么（如何压缩上下文、如何评估质量、如何存储记忆），完全由你实现的组件决定。
@@ -47,21 +47,23 @@ harness/
 ├── core/                    # 内核
 │   ├── container.py         # DIContainer（注册/解析/查询）
 │   ├── orchestrator.py      # LifecycleOrchestrator（三阶段编排）
+│   ├── tool_router.py       # ToolRouter（框架内部，合并 Provider 路由）
 │   ├── exceptions.py        # 异常体系
 │   ├── config.py            # 配置模型
 │   ├── types.py             # ⚠️ DEPRECATED — 旧类型，已废弃
 │   └── llm_adapter.py       # re-export 包装（→ adapters/）
 ├── interfaces/              # 接口与类型定义（正式来源 ★）
 │   ├── __init__.py          # 导出所有类型和接口
-│   ├── types.py             # 16 个正式 dataclass
+│   ├── types.py             # 17 个正式 dataclass
 │   ├── input_adapter.py     # InputAdapter Protocol
 │   ├── guide_provider.py    # GuideProvider Protocol
 │   ├── context_assembler.py # ContextAssembler Protocol
 │   ├── memory_backend.py    # MemoryBackend Protocol
 │   ├── sensor.py            # Sensor Protocol
 │   ├── tool.py              # Tool Protocol
-│   ├── tool_registry.py     # ToolRegistry Protocol
-│   ├── mcp_manager.py       # MCPManager Protocol
+│   ├── system_tool_provider.py  # SystemToolProvider Protocol
+│   ├── mcp_adapter.py       # MCPAdapter Protocol
+│   ├── mcp_handler.py       # MCPHandler Protocol
 │   └── hook.py              # Hook 类型别名 + HookContext
 ├── adapters/                # 外部系统适配器
 │   └── llm_adapter.py       # MinimalLLMAdapter
@@ -80,8 +82,7 @@ harness/
 ```python
 from harness.di import Harness
 from harness.core.container import DIContainer
-from harness.core.orchestrator import InputAdapter
-from harness.interfaces.types import UserRequest
+from harness.interfaces import InputAdapter, UserRequest
 from harness.adapters.llm_adapter import MinimalLLMAdapter
 
 # 1. 创建容器 + 注册组件
@@ -122,7 +123,7 @@ harness.run()
 │    → 如果是退出：跳转到阶段三                     │
 │ 3. GuideProvider.get_guides()  → GuidesBundle   │
 │ 4. MemoryBackend.search()      → List[MemoryItem]│
-│ 5. ToolRegistry.list_tools()   → List[ToolDef]  │
+│ 5. ToolRouter.list_tools()     → List[ToolDef]  │
 │ 6. 组装 AssemblyContext                          │
 └──────────────────────────────────────────────────┘
                      ↓
@@ -133,7 +134,7 @@ harness.run()
 │  ┌─ 内层循环（tool 连续调用）─────────────────┐ │
 │  │ 7. call_llm(messages, tools) → Response    │ │
 │  │ 8. 如果有 tool_uses:                       │ │
-│  │    → ToolRegistry.execute()                │ │
+│  │    → ToolRouter.execute()（查表分发）       │ │
 │  │    → 结果追加到 messages                   │ │
 │  │    → 回到步骤 7（继续内层循环）             │ │
 │  │ 9. 如果有 text:                            │ │
@@ -148,8 +149,11 @@ harness.run()
 阶段三：会话结束 (Phase End) — 整个会话只执行一次
 ┌──────────────────────────────────────────────────┐
 │ 12. 组装 Trajectory（完整执行轨迹）               │
-│ 13. Sensor.sense(trajectory)                     │
-│ 14. 清理内部状态                                  │
+│ 13. 触发 on_session_end Hook                     │
+│ 14. Sensor.sense(trajectory)                     │
+│ 15. 触发 after_sensor Hook（只读观察）            │
+│ 16. ToolRouter.shutdown() → 清理 Provider 资源    │
+│ 17. 清理内部状态                                  │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -172,7 +176,8 @@ harness.run()
 | GuideProvider | 可选 | 跳过，GuidesBundle 为空 |
 | MemoryBackend | 可选 | 跳过，检索不到记忆 |
 | ContextAssembler | 可选 | 使用内置降级组装（仅拼 system + user） |
-| ToolRegistry | 可选 | tool_use 响应记录错误，不会崩溃 |
+| SystemToolProvider | 可选 | ToolRouter 无系统工具，仅 MCP 工具可用 |
+| MCPAdapter | 可选 | ToolRouter 仅含系统工具，MCP 功能裁切 |
 | Sensor | 可选 | 跳过，不保存轨迹 |
 
 ---
@@ -317,36 +322,49 @@ class MyAssembler:
 
 **如果你不注册 ContextAssembler**，框架使用内置降级逻辑（`_fallback_assemble`）。降级逻辑**有意设计为极简**：只拼接 system identity + 当前 user 输入，不包含对话历史、memories、tools。它仅用于调试和验证编排流程，**生产环境强烈建议注册自己实现的 ContextAssembler**。
 
-### 4.5 ToolRegistry（可选）
+### 4.5 SystemToolProvider（可选）
 
-管理所有 Tool 的注册与调度执行。
+系统工具提供者，管理本地实现的 Tool 集合。DI 插件，用户可替换。
 
 ```python
-from harness.interfaces.types import ToolDefinition
+from harness.interfaces.types import ToolDefinition, ToolResult
 
-class MyToolRegistry:
-    def register(self, tool) -> None:
-        """注册一个工具实例。在框架初始化时调用。"""
+class MySystemToolProvider:
+    def get_tools(self) -> List[ToolDefinition]:
+        """返回所有系统工具的定义列表。"""
         ...
 
-    def list_tools(self) -> List[ToolDefinition]:
-        """返回所有可用工具的定义列表。"""
-        ...
-
-    def execute(self, name: str, args: Dict[str, Any]):
-        """执行指定工具。返回的对象应有 success/content/error 属性。"""
+    def execute(self, name: str, args: Dict[str, Any]) -> ToolResult:
+        """执行指定工具。返回 ToolResult。"""
         ...
 ```
 
-**`execute()` 返回值约定**（duck typing）：
+默认实现：`DefaultSystemToolProvider` — 内置 `ReadFileTool`、`WriteFileTool`、`ShellTool`。支持 `extra_tools` 追加和 `@inline_tool` 装饰器扩展。
 
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `success` | `bool` | 执行是否成功 |
-| `content` | `Any` | 成功时的结果 |
-| `error` | `Optional[str]` | 失败时的错误信息 |
+### 4.6 MCPAdapter（可选）
 
-### 4.6 Sensor（可选）
+MCP 适配层，消费外部 MCP Server，经声明式/程序化转换后暴露工具。DI 插件，不注册即裁切 MCP 功能。
+
+```python
+from harness.interfaces.types import ToolDefinition, ToolResult
+
+class MyMCPAdapter:
+    def get_tools(self) -> List[ToolDefinition]:
+        """发现并返回 MCP 工具定义列表。"""
+        ...
+
+    def execute(self, name: str, args: Dict[str, Any]) -> ToolResult:
+        """执行 MCP 工具。"""
+        ...
+
+    def shutdown(self) -> None:
+        """关闭 MCP Server 子进程连接。"""
+        ...
+```
+
+默认实现：`DefaultMCPAdapter` — 接收 `MCPServerConfig` 列表和 `ToolTransform` 字典，管理 MCPClient 子进程生命周期和转换管道。
+
+### 4.7 Sensor（可选）
 
 反馈控制组件，在会话结束时评估完整轨迹并沉淀知识到 MemoryBackend。
 
@@ -374,7 +392,7 @@ container.register(Sensor, sensor)
 
 ## 5. 数据类型速查
 
-所有正式类型定义在 [harness/interfaces/types.py](harness/interfaces/types.py)，共 16 个 dataclass。旧的 `harness.core.types` 已废弃（import 时触发 `DeprecationWarning`）。
+所有正式类型定义在 [harness/interfaces/types.py](harness/interfaces/types.py)，共 17 个 dataclass。旧的 `harness.core.types` 已废弃（import 时触发 `DeprecationWarning`）。
 
 ### 5.1 UserRequest
 
@@ -550,7 +568,7 @@ GuideProvider.get_guides() 产出  → GuidesBundle（含 Example）
 ContextAssembler.assemble() 消费 ← AssemblyContext
   (内含: UserRequest, GuidesBundle, ToolDefinition[], Message[], MemoryItem[], SystemState)
 call_llm 产出                     → Response（含 ToolCall[]）
-  ToolRegistry.execute() 记录     → ToolCallRecord
+  ToolRouter.execute() 记录       → ToolCallRecord
 Sensor.sense() 消费              ← Trajectory
   (内含: UserRequest, Message[], ToolCallRecord[], SystemState)
 ```
@@ -564,9 +582,9 @@ Sensor.sense() 消费              ← Trajectory
 ```python
 from harness.di import Harness
 from harness.core.container import DIContainer
-from harness.core.orchestrator import (
+from harness.interfaces import (
     InputAdapter, GuideProvider, ContextAssembler,
-    MemoryBackend, Sensor,
+    MemoryBackend, Sensor, SystemToolProvider, MCPAdapter,
 )
 from harness.adapters.llm_adapter import MinimalLLMAdapter
 
@@ -1038,8 +1056,8 @@ class MdMemory:
 
 ```python
 from harness.core.container import DIContainer
-from harness.core.orchestrator import InputAdapter, LifecycleOrchestrator
-from harness.interfaces.types import UserRequest, Response, GuidesBundle
+from harness.core.orchestrator import LifecycleOrchestrator
+from harness.interfaces import InputAdapter, UserRequest, Response, GuidesBundle
 
 class TestMyComponent:
     def test_basic_flow(self):
@@ -1119,7 +1137,7 @@ A: 如果你注册了 ContextAssembler，编排器用它组装消息。如果没
 
 ### Q: 数据结构的正式类型在哪里定义？
 
-A: 所有 16 个数据类型统一定义在 `harness/interfaces/types.py`。`harness.core.types` 中的旧类型已标记为 deprecated（导入时会触发 `DeprecationWarning`），不应在新代码中使用。
+A: 所有 17 个数据类型统一定义在 `harness/interfaces/types.py`。`harness.core.types` 中的旧类型已标记为 deprecated（导入时会触发 `DeprecationWarning`），不应在新代码中使用。
 
 ### Q: ToolCall 的 parse_arguments() 方法在哪？
 
@@ -1168,6 +1186,7 @@ A: 返回 `List[Message]` 或 `List[dict]` 都可以。编排器在传给 LLM �
 可选:
   □ GuideProvider
   □ MemoryBackend
-  □ ToolRegistry
+  □ SystemToolProvider（本地工具）
+  □ MCPAdapter（MCP 工具，不注册即裁切）
   □ Sensor
 ```

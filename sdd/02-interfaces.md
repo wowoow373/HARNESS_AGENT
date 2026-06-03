@@ -289,7 +289,7 @@ class SimpleAssembler:
 ```
 
 设计说明：
-- **框架基线**：框架在每轮外层循环开始前自动执行 `memory.search(user_request.text, namespace="episodic")`，结果填入 `AssemblyContext.memories`。ContextAssembler 的最低实现只需消费 `AssemblyContext.memories`，**无需**持有 MemoryBackend 引用。
+- **框架基线**：框架在会话初始化阶段（Phase 1）自动执行 `memory.search(user_request.text, namespace="episodic")`，结果填入 `AssemblyContext.memories`。该结果在会话期间缓存复用。ContextAssembler 的最低实现只需消费 `AssemblyContext.memories`，**无需**持有 MemoryBackend 引用。
 - **组件增强**：当 ContextAssembler 需要超越框架基线的检索策略时（如跨 namespace 检索 `semantic`/`procedural`、使用不同 query 策略），可通过构造函数注入 MemoryBackend 并在 `assemble()` 内执行额外检索。此时可自行决定如何合并/去重/忽略 `AssemblyContext.memories` 中的框架基线结果。
 
 实现示例：`SimpleAssembler` — 滑动窗口截断 + 直接拼接 guides、memories、history
@@ -348,7 +348,7 @@ class LoggingSensor:
     def __init__(self, memory: MemoryBackend):
         self.memory = memory
 
-    def sense(self, trajectory: Trajectory) -> void:
+    def sense(self, trajectory: Trajectory) -> None:
         # 通过 self.memory.write(...) 写入
         ...
 ```
@@ -506,7 +506,7 @@ Hook 点列表（事件名 → data 类型），共 **11 个**：
 
 - ContextAssembler **只从 MemoryBackend 读取**，永不直接接触 Sensor
 - Sensor **直接操作 MemoryBackend**（构造注入），其评估结果通过记忆层间接影响后续会话上下文
-- **记忆检索双模式**：框架在每轮外层循环前自动执行基线检索（`namespace="episodic"`）并填入 `AssemblyContext.memories`；ContextAssembler 可通过构造注入的 MemoryBackend 执行额外定制检索（跨 namespace、不同 query 策略），此时自行决定如何使用/合并/忽略框架基线结果
+- **记忆检索**：框架在会话初始化阶段（Phase 1）自动执行基线检索（`namespace="episodic"`）并填入 `AssemblyContext.memories`，结果在会话期间缓存复用；ContextAssembler 可通过构造注入的 MemoryBackend 在 `assemble()` 内执行额外定制检索（跨 namespace、不同 query 策略），此时自行决定如何使用/合并/忽略框架基线结果
 - GuidesBundle、available_tools 在初始化阶段获取后**缓存复用**，不随每轮重新构建
 - 内层循环（tool_use 连续生成）**不走 ContextAssembler.assemble()**，tool result 直接追加到 message list
 - 多 Tool 场景下，ToolRouter **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook

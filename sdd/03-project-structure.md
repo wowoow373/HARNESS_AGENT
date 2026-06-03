@@ -37,7 +37,6 @@ harness_agent/
 
 **放什么：**
 - DI 容器实现
-- 事件总线实现
 - 生命周期编排器（按固定顺序调用组件的方法）
 - ToolRouter（框架内部，合并 SystemToolProvider/MCPAdapter，按名路由执行）
 - 内部数据类型定义
@@ -77,9 +76,9 @@ harness/interfaces/
 ├── memory_backend.py         # MemoryBackend 接口
 ├── sensor.py                 # Sensor 接口
 ├── tool.py                   # Tool 接口
-├── system_tool_provider.py   # SystemToolProvider 接口
-├── mcp_adapter.py            # MCPAdapter 接口
-├── mcp_handler.py            # MCPHandler 接口
+├── system_tool_provider.py   # SystemToolProvider 接口（batch-06）
+├── mcp_adapter.py            # MCPAdapter 接口（batch-06）
+├── mcp_handler.py            # MCPHandler 接口（batch-06）
 └── hook.py                   # Hook 接口 + HookContext
 ```
 
@@ -100,31 +99,29 @@ harness/interfaces/
 ```
 harness/components/
 ├── __init__.py
-├── input_adapter/
-│   ├── __init__.py
-│   └── cli_adapter.py            # CliAdapter（默认 InputAdapter 实现）
-├── guide_provider/
+├── guide_provider/                # Batch-04（已实现）
 │   ├── __init__.py
 │   └── file_guide_provider.py    # FileGuideProvider（默认实现）
-├── context_assembler/
+├── context_assembler/             # Batch-05（已实现）
 │   ├── __init__.py
 │   └── simple_assembler.py       # SimpleAssembler（默认实现，构造注入 MemoryBackend）
-├── memory_backend/
+├── memory_backend/                # Batch-03（已实现）
 │   ├── __init__.py
 │   └── md_memory.py              # MdMemory（默认实现，启动时构建内存索引）
-├── sensor/
+├── tool/                          # Batch-06（已实现）
 │   ├── __init__.py
-│   └── logging_sensor.py         # LoggingSensor（默认实现，构造注入 MemoryBackend）
-├── mcp_manager/
+│   ├── base.py                   # BaseTool ABC（Tool 的便利基类）
+│   ├── inline_tool.py            # @inline_tool 装饰器（将函数快速转为 Tool）
+│   ├── system_tools.py           # 系统基础 Tool（ReadFileTool、WriteFileTool、ShellTool）
+│   └── default_system_tool_provider.py  # DefaultSystemToolProvider（默认实现）
+├── mcp_manager/                   # Batch-06（已实现）
 │   ├── __init__.py
 │   ├── default_mcp_adapter.py    # DefaultMCPAdapter（默认实现，含 ToolTransform + MCPHandler 管道）
 │   └── mcp_client.py             # MCPClient（stdio/SSE 子进程管理）
-└── tool/
-    ├── __init__.py
-    ├── base.py                   # BaseTool ABC（Tool 的便利基类）
-    ├── inline_tool.py            # @inline_tool 装饰器（将函数快速转为 Tool）
-    ├── system_tools.py           # 系统基础 Tool（ReadFileTool、WriteFileTool、ShellTool）
-    └── default_system_tool_provider.py  # DefaultSystemToolProvider（默认实现）
+├── input_adapter/                 # Batch-08（待实现）
+│   └── __init__.py
+└── sensor/                        # Batch-07（待实现）
+    └── __init__.py
 ```
 
 ---

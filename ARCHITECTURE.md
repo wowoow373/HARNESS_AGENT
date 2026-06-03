@@ -21,7 +21,7 @@
 
 ```
 控制流（框架固定，按会话生命周期）：
-  【会话初始化】InputAdapter.receive() → GuideProvider → MemoryBackend → ToolRegistry → ContextAssembler
+  【会话初始化】InputAdapter.receive() → GuideProvider → MemoryBackend → ToolRouter → ContextAssembler
   【多轮循环】   ContextAssembler → LLM → [Tool] → InputAdapter.send() → InputAdapter.receive() → ContextAssembler
   【会话结束】   Sensor → MemoryBackend
 
@@ -49,8 +49,10 @@
 | **InputAdapter** | 输入输出适配：接收用户输入并返回响应 | 用户原始输入 | 标准化 UserRequest / 输出 Response |
 | **GuideProvider** | 前馈控制：行动前提供指导 | 当前会话状态、环境状态 | GuidesBundle |
 | **ContextAssembler** | 上下文工程：拼接所有信息给 LLM | 大包对象（guides、history、memories、system_state） | List[Message] |
-| **MCPManager** | MCP配置入口：将用户的MCP配置转换为框架Tool | 用户MCP配置 | List[Tool] |
-| **Tool** | 工具执行层：被框架调用以描述能力或执行操作 | 框架调用请求 | 工具元信息（供发现）/ 执行结果（供上下文） |
+| **ToolRouter** | 工具路由：合并多个 Provider 的工具并按名分发执行（框架内部，非 DI） | SystemToolProvider + MCPAdapter | 合并工具列表 / 路由执行结果 |
+| **SystemToolProvider** | 系统工具提供者：管理本地实现的 Tool 集合（DI 插件，用户可替换） | 框架调用请求 | 工具元信息 / 执行结果 |
+| **MCPAdapter** | MCP 适配层：消费外部 MCP Server，经转换后暴露工具（DI 插件，不注册即裁切） | 外部 MCP Server | 工具元信息 / 执行结果 |
+| **Tool** | 工具执行层：被 ToolRouter 通过 Provider 调用以描述能力或执行操作 | 框架调用请求 | 工具元信息（供发现）/ 执行结果（供上下文） |
 | **Sensor** | 反馈控制：在**会话结束时**评估完整多轮轨迹并沉淀知识 | Trajectory（完整多轮执行日志） | 写入 MemoryBackend |
 | **MemoryBackend** | 记忆层：跨会话持久化 | key/value/namespace | 存储与检索结果 |
 | **Hook** | 生命周期拦截：在关键节点插入自定义逻辑 | HookContext | 修改 context 中的数据 |
@@ -75,17 +77,24 @@
            ▲                  ▲                    │
            │                  │                    │
            │    ┌─────────────┴─────────────┐      │
-           │    │        ToolRegistry        │◀─────┘
-           │    │  ┌─────────────────────┐   │
-           │    │  │ 系统Tool + MCP Tool │   │
-           │    │  └─────────────────────┘   │
-           │    └────────────────────────────┘
-           │                  ▲
-           │                  │
-           │         ┌────────┴────────┐
-           │         │   MCPManager    │
-           │         │  load_tools()   │
-           │         └─────────────────┘
+           │    │   ToolRouter (框架内部)     │◀─────┘
+           │    │  ┌──────────┬──────────┐   │
+           │    │  │ 系统Tool │ MCP Tool │   │
+           │    │  └─────┬────┴────┬─────┘   │
+           │    └────────┼─────────┼─────────┘
+           │             │         │
+           │    ┌────────▼───┐  ┌──▼──────────────┐
+           │    │SystemTool  │  │  MCPAdapter      │
+           │    │Provider    │  │  (DI 插件，可裁切) │
+           │    │(DI 插件)   │  │                   │
+           │    └────────────┘  │  ┌─────────────┐  │
+           │                    │  │ MCPClient   │──┤→ 外部 MCP Server
+           │                    │  └─────────────┘  │
+           │                    │  ┌─────────────┐  │
+           │                    │  │ Transform   │  │
+           │                    │  │ Pipeline    │  │
+           │                    │  └─────────────┘  │
+           │                    └───────────────────┘
            │
            └────────────────────┐
                                 │
@@ -98,11 +107,13 @@
 **关键约束**：
 - ContextAssembler **只从 MemoryBackend 读取记忆**，永不直接接触 Sensor
 - Sensor **直接操作 MemoryBackend**，其评估结果通过记忆层间接影响下一轮上下文
-- **记忆检索双模式**：框架在每轮外层循环前自动执行基线检索并填入 `AssemblyContext.memories`；ContextAssembler 可通过注入的 MemoryBackend 执行额外定制检索（跨 namespace、不同 query 策略）
+- **记忆检索**：框架在会话初始化阶段自动执行基线检索（`namespace="episodic"`）并填入 `AssemblyContext.memories`，结果缓存复用；ContextAssembler 可通过注入的 MemoryBackend 在 `assemble()` 内执行额外定制检索（跨 namespace、不同 query 策略）
 - 所有组件通过 **DI 容器** 装配，组件间依赖通过构造函数注入
-- **MCPManager只在初始化阶段工作**：将用户MCP配置转换为Tool，注册到ToolRegistry后不再参与运行时
-- **系统基础Tool直接注册到ToolRegistry**，不经过MCPManager
-- **所有Tool（系统+用户）统一走ToolRegistry执行**，执行前后触发Hook
+- **ToolRouter 是框架内部组件**（非 DI），由编排器在 `_phase_init()` 中创建，合并 SystemToolProvider 和 MCPAdapter
+- **SystemToolProvider 和 MCPAdapter 是两个独立的 DI 插件**，各自实现自己的 Protocol，可独立替换或裁切
+- **MCPAdapter 不注册到 DI 即表示裁切 MCP 功能**
+- **所有 Tool（系统 + MCP）统一走 ToolRouter 分发执行**，执行前后触发 Hook
+- MCPAdapter 通过内部 MCPClient 连接外部 MCP Server，持有其生命周期（含 shutdown）
 
 ---
 
@@ -147,7 +158,7 @@ assemble(inputs: AssemblyContext) → List[Message]
 **输入大包对象 AssemblyContext**：
 - user_request：来自 InputAdapter 的标准化请求
 - guides：来自 GuideProvider 的 GuidesBundle
-- available_tools：来自 ToolRegistry 的工具发现列表（name、description、parameters）
+- available_tools：来自 ToolRouter 的工具发现列表（name、description、parameters）
 - history：原始或部分压缩的对话历史
 - memories：从 MemoryBackend 检索的记忆项列表
 - system_state：系统当前状态（会话阶段、运行模式、资源状态等）
@@ -213,28 +224,34 @@ list_namespaces() → List[str]
 
 ---
 
-### 3.5 MCPManager（MCP配置入口）
+### 3.5 MCPAdapter（MCP适配层）
 
-**职责**：将用户的MCP配置（外部Server、内联工具等）转换为框架可识别的Tool实例。MCPManager是**用户裁剪的核心接口**——用户通过实现此接口或配置其参数，决定哪些工具可用。
+**职责**：消费外部 MCP Server，经声明式/程序化转换后暴露工具。MCPAdapter 是 **DI 插件**，不注册即裁切 MCP 功能。
 
 **接口方法**：
 ```
-load_tools() → List[Tool]
+get_tools() → List[ToolDefinition]
+execute(name: str, args: Dict[str, Any]) → ToolResult
+shutdown() → None
 ```
 
-**调用时机**：框架初始化阶段，仅调用一次。
+**调用时机**：
+- `get_tools()`：会话初始化阶段（通过内部 MCPClient 发现外部工具，经 ToolTransform 转换后返回）
+- `execute()`：运行时（ToolRouter 按名路由到此处）
+- `shutdown()`：会话结束阶段（关闭 MCP Server 子进程连接）
 
-**输出**：标准的Tool实例列表，会被注册到ToolRegistry，与系统Tool统一执行。
+**内部转换管道**（两级）：
+1. **ToolTransform（声明式）**：改名（`expose_as`）、隐藏（`hidden`）、注入默认值（`arg_defaults`），覆盖 90% 场景
+2. **MCPHandler（程序化）**：当声明式不够用时提供 `transform_schema` / `transform_args` / `transform_result` 钩子
 
 **实现示例**：
-- **ServerMCPManager**：连接外部MCP Server（stdio/SSE），将其暴露的工具转换为框架Tool
-- **InlineMCPManager**：将用户在代码中注册的内联函数包装为框架Tool
+- **DefaultMCPAdapter**：接收 `MCPServerConfig` 列表和 `ToolTransform` 字典，管理 MCPClient 子进程生命周期和转换管道
 
 ---
 
 ### 3.6 Tool（工具执行层）
 
-**职责**：工具的实际执行层。被ToolRegistry统一调度。
+**职责**：工具的实际执行层。被 ToolRouter 通过 Provider 统一调度。
 
 **接口方法**：
 ```
@@ -242,7 +259,7 @@ get_definition() → ToolDefinition       # name、description、parameters
 execute(args: Dict[str, Any]) → ToolResult  # 工具执行
 ```
 
-**关键设计**：Tool是框架内部执行抽象，用户不直接实现Tool接口（通过MCPManager间接注入）。
+**关键设计**：Tool是框架内部执行抽象，用户不直接实现Tool接口（通过 SystemToolProvider 或 MCPAdapter 间接注入）。`BaseTool` ABC 和 `@inline_tool` 装饰器是辅助构建 Tool 实例的便利工具。
 
 ---
 
@@ -317,8 +334,8 @@ on_session_end             → 会话结束清理
 3. 框架从 MemoryBackend 检索相关记忆
    → memory.search(user_request.text, namespace="episodic")
    ↓
-4. 框架从 ToolRegistry 获取可用工具
-   → ToolRegistry.list_tools() 返回系统Tool + MCPManager注入的Tool的元信息
+4. 框架初始化 ToolRouter，注册 SystemToolProvider 和 MCPAdapter（若已 DI 注册）
+   → ToolRouter.list_tools() 返回合并后的工具定义列表
    ↓
 5. 框架构建初始 AssemblyContext
    → 包含 user_request、guides、available_tools、history、memories、system_state
@@ -349,7 +366,7 @@ on_session_end             → 会话结束清理
    │      ├─ 包含 tool_uses：                            │
    │      │   → 对每个 tool_use 依次：                   │
    │      │     触发 before_tool_execute Hook            │
-   │      │     → ToolRegistry.execute()                 │
+   │      │     → ToolRouter.execute()（查表分发）        │
    │      │     → 触发 after_tool_execute Hook           │
    │      │   → 将 tool_use + tool_result 转为 LLM       │
    │      │     原生格式追加到当前 message list           │
@@ -382,15 +399,17 @@ on_session_end             → 会话结束清理
     ↓
 15. 触发 after_sensor Hook（只读观察 Sensor 写入结果）
     ↓
-16. 会话结束
+16. ToolRouter.shutdown() → 统一清理各 Provider 资源（如 MCPAdapter 关闭 MCP Server 连接）
+    ↓
+17. 会话结束
 ```
 
 **关键设计**：
-- `GuidesBundle`、`available_tools` 在阶段一获取后**缓存复用**，不随每轮重新构建。`memories` 每次外层循环重新检索
+- `GuidesBundle`、`available_tools`、`memories` 在阶段一获取后**缓存复用**，不随每轮重新构建
 - Sensor 在**会话结束阶段**统一评估完整的多轮 Trajectory，而非每轮触发
 - **外层循环**（步骤 6→11）：用户每次新输入触发 `InputAdapter.receive()`，然后完整执行 `ContextAssembler.assemble()`
 - **内层循环**（步骤 8→10）：`tool_use` 触发同一轮内的快速循环，tool result 直接追加到当前 message list 后回传 LLM 继续生成，**不重新走 `ContextAssembler.assemble()`**
-- 多 tool 场景下，`ToolRegistry` **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook
+- 多 tool 场景下，`ToolRouter` **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook
 - LLM 单次响应可**同时包含 text 和 tool_uses**（非互斥），框架分别处理
 - 框架内部包含**轻量转换层**：将框架类型（Message、ToolDefinition、ToolResult）与 LLM 原生格式互转
 
@@ -435,7 +454,8 @@ version = "0.1.0"
 input_adapter = true
 guide_provider = true
 context_assembler = true
-mcp_manager = true
+system_tool_provider = true
+mcp_adapter = true
 sensor = true
 memory_backend = true
 ```
@@ -453,7 +473,6 @@ input_adapter = CliAdapter()
 guide_provider = FileGuideProvider(rules_file="AGENTS.md")
 context_assembler = SimpleAssembler(memory=memory)
 sensor = LoggingSensor(memory=memory)
-mcp_manager = ServerMCPManager(config=mcp_config)
 
 # 3. 注册到容器
 container = DIContainer()
@@ -462,11 +481,20 @@ container.register(GuideProvider, guide_provider)
 container.register(ContextAssembler, context_assembler)
 container.register(Sensor, sensor)
 container.register(MemoryBackend, memory)
-container.register(MCPManager, mcp_manager)
+
+# 系统工具 — 内置工具自动注入
+container.register(SystemToolProvider, DefaultSystemToolProvider())
+
+# MCP 适配层（不注册即裁切）
+container.register(MCPAdapter, DefaultMCPAdapter(
+    servers=[MCPServerConfig(name="fs", command="npx",
+                             args=["-y", "@anthropic/mcp-filesystem", "/tmp"])],
+    transforms={"filesystem_delete": ToolTransform(hidden=True)},
+))
 
 # 4. 启动 Harness
-#    框架内部：创建ToolRegistry → 注册系统Tool → 调用MCPManager.load_tools()
-harness = Harness.from_container(container)
+#    框架内部：创建 ToolRouter → 注册 SystemToolProvider + MCPAdapter
+harness = Harness.from_container(container, call_llm=my_llm)
 harness.run()
 ```
 
@@ -475,6 +503,7 @@ harness.run()
 - 用户通过构造函数参数完全控制组件行为
 - 框架不关心组件如何创建，只关心它们满足接口契约
 - 同一个实例注册到容器，自然保证 MemoryBackend 在 ContextAssembler 和 Sensor 之间共享
+- SystemToolProvider 和 MCPAdapter 是独立的 DI 插件，不注册即裁切
 
 ---
 
@@ -492,7 +521,7 @@ profiles/
 │   ├── guides/
 │   │   └── project_guide.py  # 默认 GuideProvider 骨架
 │   ├── mcp/
-│   │   └── server_manager.py # 默认 MCPManager 骨架
+│   │   └── mcp_adapter.py    # 默认 MCPAdapter 骨架
 │   ├── sensors/
 │   │   ├── pytest_sensor.py
 │   │   └── mypy_sensor.py
@@ -507,7 +536,7 @@ profiles/
 │   ├── guides/
 │   │   └── travel_guide.py
 │   ├── mcp/
-│   │   └── travel_tools.py   # 旅行领域MCP配置
+│   │   └── travel_tools.py   # 旅行领域 MCP 配置
 │   ├── sensors/
 │   │   └── preference_sensor.py
 │   └── context/
