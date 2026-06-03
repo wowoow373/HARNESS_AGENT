@@ -15,14 +15,15 @@
 - [ ] A1.5 `harness/interfaces/memory_backend.py` 存在，内容非空
 - [ ] A1.6 `harness/interfaces/sensor.py` 存在，内容非空
 - [ ] A1.7 `harness/interfaces/tool.py` 存在，内容非空
-- [ ] A1.8 `harness/interfaces/tool_registry.py` 存在，内容非空
-- [ ] A1.9 `harness/interfaces/mcp_manager.py` 存在，内容非空
-- [ ] A1.10 `harness/interfaces/hook.py` 存在，内容非空
-- [ ] A1.11 `harness/interfaces/__init__.py` 存在，内容非空
+- [ ] A1.8 `harness/interfaces/system_tool_provider.py` 存在，内容非空
+- [ ] A1.9 `harness/interfaces/mcp_adapter.py` 存在，内容非空
+- [ ] A1.10 `harness/interfaces/mcp_handler.py` 存在，内容非空
+- [ ] A1.11 `harness/interfaces/hook.py` 存在，内容非空
+- [ ] A1.12 `harness/interfaces/__init__.py` 存在，内容非空
 
 ---
 
-## 二、types.py — 16 个大包对象
+## 二、types.py — 17 个大包对象
 
 ### 2.1 字段完整性
 
@@ -99,21 +100,28 @@
 - [ ] A3.6.1 `get_definition() → ToolDefinition`
 - [ ] A3.6.2 `execute(args: Dict[str, Any]) → ToolResult`
 
-### 3.7 ToolRegistry
+### 3.7 SystemToolProvider
 
-- [ ] A3.7.1 `register(tool: Tool) → None`
-- [ ] A3.7.2 `list_tools() → List[ToolDefinition]`
-- [ ] A3.7.3 `execute(name: str, args: Dict[str, Any]) → ToolResult`
+- [ ] A3.7.1 `get_tools() → List[ToolDefinition]`
+- [ ] A3.7.2 `execute(name: str, args: Dict[str, Any]) → ToolResult`
 
-### 3.8 MCPManager
+### 3.8 MCPAdapter
 
-- [ ] A3.8.1 `load_tools() → List[Tool]`
+- [ ] A3.8.1 `get_tools() → List[ToolDefinition]`
+- [ ] A3.8.2 `execute(name: str, args: Dict[str, Any]) → ToolResult`
+- [ ] A3.8.3 `shutdown() → None`
 
-### 3.9 Hook
+### 3.9 MCPHandler
 
-- [ ] A3.9.1 `HookContext` dataclass 存在于 `hook.py`
-- [ ] A3.9.2 `HookContext` 包含 `event: str`, `data: Any`, `system_state: SystemState`
-- [ ] A3.9.3 `Hook` 类型别名为 `Callable[[HookContext], None]`
+- [ ] A3.9.1 `transform_schema(name: str, schema: Dict) → Dict`
+- [ ] A3.9.2 `transform_args(name: str, args: Dict) → Dict`
+- [ ] A3.9.3 `transform_result(name: str, result: Any) → Any`
+
+### 3.10 Hook
+
+- [ ] A3.10.1 `HookContext` dataclass 存在于 `hook.py`
+- [ ] A3.10.2 `HookContext` 包含 `event: str`, `data: Any`, `system_state: SystemState`
+- [ ] A3.10.3 `Hook` 类型别名为 `Callable[[HookContext], None]`
 
 ---
 
@@ -125,12 +133,13 @@
 - [ ] A4.4 `from harness.interfaces import MemoryBackend` 不报错
 - [ ] A4.5 `from harness.interfaces import Sensor` 不报错
 - [ ] A4.6 `from harness.interfaces import Tool` 不报错
-- [ ] A4.7 `from harness.interfaces import ToolRegistry` 不报错
-- [ ] A4.8 `from harness.interfaces import MCPManager` 不报错
-- [ ] A4.9 上述 8 个名称可作为 `DIContainer.register(InterfaceType, instance)` 的第一个参数（type 检查通过）
-- [ ] A4.10 `harness/core/orchestrator.py` 中的 `from ..interfaces import InputAdapter, ...` 不报错（如果已有代码 import 了 hook 等新名称则需确认都能正常 import）
-- [ ] A4.11 `harness/core/types.py`（_Minimal* 类型）未被修改（注：batch-02 不修改，迁移由 batch-02-1 完成）
-- [ ] A4.12 `harness/core/orchestrator.py` 未被修改
+- [ ] A4.7 `from harness.interfaces import SystemToolProvider` 不报错
+- [ ] A4.8 `from harness.interfaces import MCPAdapter` 不报错
+- [ ] A4.9 `from harness.interfaces import MCPHandler` 不报错
+- [ ] A4.10 上述 10 个名称可作为 `DIContainer.register(InterfaceType, instance)` 的第一个参数（type 检查通过）
+- [ ] A4.11 `harness/core/orchestrator.py` 中的 `from ..interfaces import InputAdapter, ...` 不报错（如果已有代码 import 了 hook 等新名称则需确认都能正常 import）
+- [ ] A4.12 `harness/core/types.py`（_Minimal* 类型）未被修改（注：batch-02 不修改，迁移由 batch-02-1 完成）
+- [ ] A4.13 `harness/core/orchestrator.py` 未被修改
 
 ---
 
@@ -164,8 +173,8 @@
 
 ## 六、对照 SDD 的一致性检查
 
-- [ ] A6.1 `types.py` 中的类型数量 = 16（与 sdd/02-interfaces.md 一致）
-- [ ] A6.2 接口数量 = 9（InputAdapter, GuideProvider, ContextAssembler, MemoryBackend, Sensor, Tool, ToolRegistry, MCPManager, Hook）
+- [ ] A6.1 `types.py` 中的类型数量 = 17（与 sdd/02-interfaces.md 一致，含新增的 `ToolTransform`）
+- [ ] A6.2 接口 Protocol 数量 = 9（InputAdapter, GuideProvider, ContextAssembler, MemoryBackend, Sensor, Tool, SystemToolProvider, MCPAdapter, MCPHandler），加 Hook 函数类型别名 = 10 个接口相关名称
 - [ ] A6.3 `GuideContext` 和 `HookContext` 作为辅助类型存在
 - [ ] A6.4 所有字段名称与 sdd/02-interfaces.md 完全一致（大小写、下划线、拼写）
 - [ ] A6.5 文件列表与 sdd/03-project-structure.md 一致

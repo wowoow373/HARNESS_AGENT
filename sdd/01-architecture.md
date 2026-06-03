@@ -39,6 +39,41 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
 ### 3.1 组件关系
 
 ```
+                         ┌─────────────────────────────────┐
+                         │         Core Orchestrator        │
+                         │                                  │
+                         │  ToolRouter (framework-internal) │
+                         │  ┌─────────────────────────────┐ │
+                         │  │ name → provider 路由表        │ │
+                         │  │ "read_file"  → system        │ │
+                         │  │ "fs_search"  → mcp           │ │
+                         │  └─────────────────────────────┘ │
+                         │  list_tools()  → 合并列表         │
+                         │  execute()     → 查表分发         │
+                         │  shutdown()    → 分发清理         │
+                         └──────┬──────────────┬───────────┘
+                                │              │
+               ┌────────────────▼──┐  ┌────────▼──────────────┐
+               │SystemToolProvider │  │ MCPAdapter             │
+               │(DI 注册)           │  │ (DI 注册，不注册即裁切)   │
+               │                   │  │                        │
+               │ get_tools()       │  │ get_tools()            │
+               │ execute()         │  │ execute()              │
+               │                   │  │ shutdown()             │
+               │ [ReadFileTool]    │  │                        │
+               │ [WriteFileTool]   │  │ ┌────────────────────┐ │
+               │ [ShellTool]       │  │ │ MCP Consumer       │ │
+               │ (内置，自动注入)    │  │ │ (MCPClient)        │─┤→ 外部 MCP Server
+               └───────────────────┘  │ └────────────────────┘ │
+                                      │ ┌────────────────────┐ │
+                                      │ │ Transform Pipeline  │ │
+                                      │ │ 1. ToolTransform    │ │
+                                      │ │    声明式转换        │ │
+                                      │ │ 2. MCPHandler       │ │
+                                      │ │    程序化转换(可选)   │ │
+                                      │ └────────────────────┘ │
+                                      └────────────────────────┘
+
                      ┌──────────────────┐
                      │   InputAdapter   │
                      │ receive()/send() │
@@ -50,28 +85,35 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
      │GuideProvider│  │ContextAssembler│───────┤
      └─────┬──────┘  └───────┬───────┘       │
            │                  │               │
-           │    ┌─────────────┼───────┐       │
-           │    │             ▼       │       ▼
-           │    │  ┌─────────────────┐│  ┌─────────┐
-           │    │  │  ToolRegistry   ││  │   LLM   │
-           │    │  │ (系统+MCP Tool) ││  └─────────┘
+           │    ┌─────────────┼───────┐       ▼
+           │    │             ▼       │  ┌─────────┐
+           │    │  ┌─────────────────┐│  │   LLM   │
+           │    │  │   ToolRouter    ││  └─────────┘
+           │    │  │ (框架内部，非DI)  ││
            │    │  └────────┬────────┘│
            │    └───────────┼─────────┘
            │                │
-           │        ┌───────┴───────┐
-           │        │  MCPManager   │
-           │        └───────────────┘
-           │
-           ▼                ▲
-  ┌────────────────┐        │
-  │ MemoryBackend  │────────┘
-  └────────┬───────┘
-           ▲
-           │
-  ┌────────┴───────┐
-  │    Sensor      │
-  │ (构造注入 memory)│
-  └────────────────┘
+           │    ┌───────────┼───────────┐
+           │    │           │           │
+           │    ▼           ▼           │
+           │  ┌────────┐ ┌──────────┐   │
+           │  │System  │ │MCPAdapter│   │
+           │  │Tool    │ │(DI插件)   │   │
+           │  │Provider│ └──────────┘   │
+           │  └────────┘                │
+           │                            │
+           ▼                ▲           │
+  ┌────────────────┐        │           │
+  │ MemoryBackend  │────────┘           │
+  └────────┬───────┘                    │
+           ▲                            │
+           │                            │
+  ┌────────┴───────┐                    │
+  │    Sensor      │                    │
+  │ (构造注入 memory)│                    │
+  └────────────────┘                    │
+           │                            │
+           └────────────────────────────┘
 ```
 
 ### 3.2 组件职责表
@@ -81,8 +123,9 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
 | **InputAdapter** | 输入输出适配：接收用户输入、返回响应 | 会话初始化 + 每轮用户输入 + 每次 text 响应输出 |
 | **GuideProvider** | 前馈控制：行动前提供指导 | 会话初始化（一次） |
 | **ContextAssembler** | 上下文工程：拼接所有信息给 LLM | 每轮外层循环开始 |
-| **ToolRegistry** | 工具调度：管理所有 Tool 的注册与执行 | 会话初始化 + 运行时 |
-| **MCPManager** | MCP 配置入口：将用户 MCP 配置转换为 Tool | 会话初始化（一次） |
+| **ToolRouter** | 工具路由：合并 SystemToolProvider 和 MCPAdapter，按名分发执行（框架内部，非 DI） | 会话初始化 + 运行时 |
+| **SystemToolProvider** | 系统工具提供者：管理本地实现的 Tool 集合（DI 插件，用户可替换） | 会话初始化 + 运行时 |
+| **MCPAdapter** | MCP 适配层：消费外部 MCP Server，经转换后暴露工具（DI 插件，不注册即裁切） | 会话初始化 + 运行时 |
 | **Sensor** | 反馈控制：评估完整多轮轨迹，沉淀知识到 MemoryBackend | 会话结束 |
 | **MemoryBackend** | 记忆层：跨会话持久化与检索 | 会话初始化 + 会话结束 |
 | **Hook** | 生命周期拦截：在关键节点插入自定义逻辑 | 各生命周期点 |
@@ -92,8 +135,11 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
 - ContextAssembler **只从 MemoryBackend 读取**，永不直接接触 Sensor
 - Sensor **直接操作 MemoryBackend**（通过构造函数注入），其评估结果通过记忆层间接影响下一轮上下文
 - 所有组件通过 **DI 容器** 装配，依赖通过构造函数注入，用户创建实例后注册
-- MCPManager 只在初始化阶段工作，注册后不再参与运行时
-- 所有 Tool（系统 + 用户 MCP）统一走 ToolRegistry 执行
+- ToolRouter 是**框架内部组件**（非 DI），由编排器在 `_phase_init()` 中创建，合并 SystemToolProvider 和 MCPAdapter
+- SystemToolProvider 和 MCPAdapter 是两个**独立的 DI 插件**，各自实现自己的 Protocol，可独立替换或裁切
+- MCPAdapter 不注册到 DI 即表示裁切 MCP 功能
+- 所有 Tool（系统 + MCP）统一走 ToolRouter 分发执行
+- MCPAdapter 通过内部 MCPClient 连接外部 MCP Server，持有其生命周期（含 shutdown）
 
 ---
 
@@ -105,7 +151,7 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
 1. InputAdapter.receive() → UserRequest
 2. 框架构建 GuideContext → GuideProvider.get_guides() → GuidesBundle
 3. 框架从 MemoryBackend 检索相关记忆 (namespace="episodic")
-4. 框架从 ToolRegistry 获取可用工具元信息 (ToolRegistry.list_tools())
+4. 框架初始化 ToolRouter，注册 SystemToolProvider 和 MCPAdapter（若已 DI 注册），获取合并工具列表 (ToolRouter.list_tools())
 5. 框架构建初始 AssemblyContext
    （含 user_request、guides、available_tools、history、memories、system_state）
 ```
@@ -123,7 +169,7 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
    9. 触发 after_llm_call Hook
    10. 判断 Response 内容：
        - 包含 tool_uses → 每个 tool 依次触发 before/after_tool_execute Hook
-                       → ToolRegistry.execute()
+                       → ToolRouter.execute()
                        → tool_use + tool_result 追加到 message list → 回到步骤 8
        - 包含 text    → InputAdapter.send(response) → 用户 → 跳出内层循环
        

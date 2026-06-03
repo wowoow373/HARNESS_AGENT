@@ -10,8 +10,8 @@
 
 ### 在范围内
 
-1. 创建 `harness/interfaces/types.py` — 全部 16 个大包对象数据类
-2. 创建 9 个组件接口文件 — Protocol 定义
+1. 创建 `harness/interfaces/types.py` — 全部 17 个大包对象数据类
+2. 创建 10 个组件接口文件 — 9 个 Protocol 定义 + 1 个 Hook 函数类型别名
 3. 更新 `harness/interfaces/__init__.py` — 从空占位类替换为正式定义的 re-export
 
 ### 严格不在范围内
@@ -51,21 +51,24 @@ from typing import Protocol, runtime_checkable
 ```
 harness/interfaces/
 ├── __init__.py               # 导出所有公开接口和类型
-├── types.py                  # 16 个大包对象（UserRequest, SystemState, Attachment,
+├── types.py                  # 17 个大包对象（UserRequest, SystemState, Attachment,
 │                             #   EnvState, GuidesBundle, Example, AssemblyContext,
 │                             #   Trajectory, Message, Response, ToolCall,
 │                             #   ToolCallFunction, ToolDefinition, ToolCallRecord,
-│                             #   ToolResult, MemoryItem）
+│                             #   ToolResult, ToolTransform, MemoryItem）
 ├── input_adapter.py          # InputAdapter Protocol
 ├── guide_provider.py         # GuideProvider Protocol + GuideContext dataclass
 ├── context_assembler.py      # ContextAssembler Protocol
 ├── memory_backend.py         # MemoryBackend Protocol
 ├── sensor.py                 # Sensor Protocol
 ├── tool.py                   # Tool Protocol
-├── tool_registry.py          # ToolRegistry Protocol
-├── mcp_manager.py            # MCPManager Protocol
+├── system_tool_provider.py   # SystemToolProvider Protocol
+├── mcp_adapter.py            # MCPAdapter Protocol
+├── mcp_handler.py            # MCPHandler Protocol
 └── hook.py                   # Hook 函数类型 + HookContext dataclass
 ```
+
+> **注意**：`tool_registry.py`（ToolRegistry Protocol）和 `mcp_manager.py`（MCPManager Protocol）已在 batch-06 重设计中被删除。ToolRegistry 的职责由框架内部组件 `ToolRouter`（`harness/core/tool_router.py`，非 DI）替代，MCPManager 的职责由 `MCPAdapter` Protocol 替代。
 
 ### 2.3 与 `_Minimal*` 类型的关系
 
@@ -113,7 +116,7 @@ from .guide_provider import GuideProvider
 
 ---
 
-## 三、16 个大包对象设计
+## 三、17 个大包对象设计
 
 全部定义在 `harness/interfaces/types.py`。严格对照 [sdd/02-interfaces.md](../../02-interfaces.md) §通用大包对象。
 
@@ -167,7 +170,7 @@ from .guide_provider import GuideProvider
 
 ---
 
-## 四、9 个接口 Protocol 签名
+## 四、10 个接口文件签名（9 个 Protocol + 1 个 Hook 类型别名）
 
 严格对照 [sdd/02-interfaces.md](../../02-interfaces.md) §组件接口。
 
@@ -230,27 +233,42 @@ class Tool(Protocol):
     def execute(self, args: Dict[str, Any]) -> ToolResult: ...
 ```
 
-### 4.7 ToolRegistry
+### 4.7 SystemToolProvider
 
 ```python
 @runtime_checkable
-class ToolRegistry(Protocol):
-    def register(self, tool: Tool) -> None: ...
-    def list_tools(self) -> List[ToolDefinition]: ...
+class SystemToolProvider(Protocol):
+    def get_tools(self) -> List[ToolDefinition]: ...
     def execute(self, name: str, args: Dict[str, Any]) -> ToolResult: ...
 ```
 
-注意：SDD 明确 ToolRegistry 是框架内部组件，不作为用户可替换接口注册到 DI 容器。但在这批中仍需定义其 Protocol，供框架内部类型标注使用。
+系统工具提供者 — 管理本地实现的 Tool 集合。DI 插件，用户可替换。
 
-### 4.8 MCPManager
+### 4.8 MCPAdapter
 
 ```python
 @runtime_checkable
-class MCPManager(Protocol):
-    def load_tools(self) -> List[Tool]: ...
+class MCPAdapter(Protocol):
+    def get_tools(self) -> List[ToolDefinition]: ...
+    def execute(self, name: str, args: Dict[str, Any]) -> ToolResult: ...
+    def shutdown(self) -> None: ...
 ```
 
-### 4.9 Hook
+MCP 适配层 — 消费外部 MCP Server，经转换后暴露工具。DI 插件，不注册即裁切。`shutdown()` 用于关闭 MCP Server 子进程连接。
+
+### 4.9 MCPHandler
+
+```python
+@runtime_checkable
+class MCPHandler(Protocol):
+    def transform_schema(self, name: str, schema: Dict) -> Dict: ...
+    def transform_args(self, name: str, args: Dict) -> Dict: ...
+    def transform_result(self, name: str, result: Any) -> Any: ...
+```
+
+MCP 程序化转换处理器 — 可选，注入到 `DefaultMCPAdapter` 的 `handler` 参数中。当 `ToolTransform` 声明式配置不够用时提供程序化钩子。
+
+### 4.10 Hook
 
 Hook 是函数类型，不是类 Protocol：
 
@@ -275,27 +293,29 @@ types.py（无内部依赖，最底层）
     ├── memory_backend.py       (import MemoryItem)
     ├── sensor.py               (import Trajectory)
     ├── tool.py                 (import ToolDefinition, ToolResult)
-    ├── tool_registry.py        (import Tool, ToolDefinition, ToolResult)
-    ├── mcp_manager.py          (import Tool)
+    ├── system_tool_provider.py (import ToolDefinition, ToolResult)
+    ├── mcp_adapter.py          (import ToolDefinition, ToolResult)
+    ├── mcp_handler.py          (import Dict, Any)
     └── hook.py                 (import SystemState)
 ```
 
 ### 5.2 接口之间的依赖
 
 ```
-Tool ← ToolRegistry, MCPManager
+Tool ← SystemToolProvider, MCPAdapter（通过 ToolDefinition / ToolResult 间接依赖，不直接引用 Tool Protocol）
 ```
 
-`ToolRegistry` 和 `MCPManager` 的签名引用了 `Tool` 类型。其余接口之间无互相依赖。
+其余接口之间无互相依赖。
 
 ### 5.3 文件创建顺序
 
 基于依赖关系的推荐创建顺序：
 
-1. `types.py` — 无内部依赖，最先创建
+1. `types.py` — 无内部依赖，最先创建（含 17 个 dataclass，包括 `ToolTransform`）
 2. `tool.py` — 仅依赖 types
-3. 其余 7 个接口文件 — 依赖 types（+ tool.py for tool_registry/mcp_manager），可并行创建
-4. `__init__.py` — 所有子模块就绪后更新
+3. `system_tool_provider.py`、`mcp_adapter.py`、`mcp_handler.py` — 依赖 types，可并行创建
+4. 其余 6 个接口文件 — 依赖 types，可并行创建
+5. `__init__.py` — 所有子模块就绪后更新
 
 ---
 
@@ -326,6 +346,14 @@ Tool ← ToolRegistry, MCPManager
 | batch-05 | `ContextAssembler.assemble()` | `inputs: AssemblyContext` | `List[Message]` |
 | batch-06 | `Tool.get_definition()` | (无) | `ToolDefinition` |
 | batch-06 | `Tool.execute()` | `args: Dict[str, Any]` | `ToolResult` |
+| batch-06 | `SystemToolProvider.get_tools()` | (无) | `List[ToolDefinition]` |
+| batch-06 | `SystemToolProvider.execute()` | `name: str, args: Dict[str, Any]` | `ToolResult` |
+| batch-06 | `MCPAdapter.get_tools()` | (无) | `List[ToolDefinition]` |
+| batch-06 | `MCPAdapter.execute()` | `name: str, args: Dict[str, Any]` | `ToolResult` |
+| batch-06 | `MCPAdapter.shutdown()` | (无) | `None` |
+| batch-06 | `MCPHandler.transform_schema()` | `name: str, schema: Dict` | `Dict` |
+| batch-06 | `MCPHandler.transform_args()` | `name: str, args: Dict` | `Dict` |
+| batch-06 | `MCPHandler.transform_result()` | `name: str, result: Any` | `Any` |
 | batch-07 | `Sensor.sense()` | `trajectory: Trajectory` | `None` |
 | batch-08 | `InputAdapter.receive()` | (无) | `UserRequest` |
 | batch-08 | `InputAdapter.send()` | `response: Response` | `None` |

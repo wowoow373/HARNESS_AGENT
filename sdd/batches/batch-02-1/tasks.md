@@ -89,7 +89,7 @@
 - [ ] 3.2.2 `self._tool_call_records: List[Dict[str, Any]]` → `List[ToolCallRecord]`
 - [ ] 3.2.3 `self._cached_guides: Optional[_MinimalGuidesBundle]` → `Optional[GuidesBundle]`
 - [ ] 3.2.4 `self._cached_tools: List[Dict[str, Any]]` → `List[ToolDefinition]`
-- [ ] 3.2.5 `self._cached_tool_registry: Optional[Any]` — 保持不变（类型标注已足够模糊）
+- [ ] 3.2.5 `self._tool_router: Optional[Any]` — ToolRouter 实例（batch-06 中替代 `_cached_tool_registry`）
 
 ### 3.3 方法签名升级
 
@@ -292,7 +292,7 @@
 - [ ] 8.6 运行 `python -m pytest tests/ -v` — 全部通过，0 失败
 - [ ] 8.7 运行 `python -m pytest tests/ --cov=harness --cov-report=term-missing` — 覆盖率达到或超过 batch-01 基线
 - [ ] 8.8 验证 re-export 包装路径一致性：`python -c "from harness.core.llm_adapter import MinimalLLMAdapter; from harness.adapters.llm_adapter import MinimalLLMAdapter as M2; assert MinimalLLMAdapter is M2"` — re-export 路径可用
-- [ ] 8.9 `python -c "from harness.interfaces.types import __all__; assert len(__all__) == 16, f'Expected 16 types, got {len(__all__)}'"` — 正式类型数量 = 16
+- [ ] 8.9 `python -c "from harness.interfaces.types import __all__; assert len(__all__) == 17, f'Expected 17 types, got {len(__all__)}'"` — 正式类型数量 = 17（batch-06 新增 ToolTransform）
 
 ---
 

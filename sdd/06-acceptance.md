@@ -9,8 +9,8 @@
 - [ ] 用户可通过 TOML 文件声明领域模板（`profile.toml`），框架解析并加载对应配置
 - [ ] 用户可通过 DI 容器显式装配组件（`container.register(Interface, instance)` — 预构造实例注册），替换任意默认实现
 - [ ] 框架能完成一轮完整的多轮对话：
-  - InputAdapter 接收用户输入 → GuideProvider 提供指导 → ContextAssembler 组装上下文 → LLM 调用（可用 mock）→ 如果 LLM 返回 tool_use → ToolRegistry 执行工具 → 结果回传 LLM 继续生成 → 最终 text 响应通过 InputAdapter 返回
-- [ ] ToolRegistry 能同时管理系统 Tool 和 MCPManager 加载的 Tool，对外提供统一的工具列表
+  - InputAdapter 接收用户输入 → GuideProvider 提供指导 → ContextAssembler 组装上下文 → LLM 调用（可用 mock）→ 如果 LLM 返回 tool_use → ToolRouter 执行工具 → 结果回传 LLM 继续生成 → 最终 text 响应通过 InputAdapter 返回
+- [ ] ToolRouter 能合并 SystemToolProvider 和 MCPAdapter 提供的 Tool，对外提供统一的工具列表
 - [ ] Hook 在关键生命周期点被触发（至少验证 `before_llm_call`、`on_session_end` 和 `after_sensor`）
 - [ ] Sensor 在会话结束后写入 MemoryBackend（通过构造注入的实例）
 - [ ] 下一会话初始化时，ContextAssembler 能读到上一会话 Sensor 写入的记忆

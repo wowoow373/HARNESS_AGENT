@@ -145,17 +145,17 @@
 
 ### 5.1 DI 容器兼容性
 
-- [ ] **AC-COMPAT-01**：8 个接口类型可作为 DI 注册 key
+- [ ] **AC-COMPAT-01**：9 个接口类型可作为 DI 注册 key
   - **验证脚本**：
     ```python
     from harness.core.container import DIContainer
     from harness.interfaces import (
         InputAdapter, GuideProvider, ContextAssembler,
-        MemoryBackend, Sensor, Tool, ToolRegistry, MCPManager,
+        MemoryBackend, Sensor, Tool, SystemToolProvider, MCPAdapter, MCPHandler,
     )
     c = DIContainer()
     for t in [InputAdapter, GuideProvider, ContextAssembler,
-              MemoryBackend, Sensor, Tool, ToolRegistry, MCPManager]:
+              MemoryBackend, Sensor, Tool, SystemToolProvider, MCPAdapter, MCPHandler]:
         c.register(t, object())
     print("PASS")
     ```
@@ -163,7 +163,7 @@
 ### 5.2 Import 路径兼容性
 
 - [ ] **AC-COMPAT-02**：`from harness.interfaces import InputAdapter` 路径不变
-  - **验证**：`python -c "from harness.interfaces import InputAdapter, GuideProvider, ContextAssembler, MemoryBackend, Sensor, Tool, ToolRegistry, MCPManager"`
+  - **验证**：`python -c "from harness.interfaces import InputAdapter, GuideProvider, ContextAssembler, MemoryBackend, Sensor, Tool, SystemToolProvider, MCPAdapter, MCPHandler"`
 - [ ] **AC-COMPAT-03**：`from harness.core.orchestrator import LifecycleOrchestrator` 路径不变
   - **验证**：`python -c "from harness.core.orchestrator import LifecycleOrchestrator"`
 - [ ] **AC-COMPAT-04**：`from harness.di import Harness` 路径不变
@@ -217,9 +217,9 @@
 
 ## 八、SDD 一致性验收
 
-- [ ] **AC-SDD-01**：正式类型数量 = 16（对照 `sdd/02-interfaces.md`）
-  - **验证**：`python -c "from harness.interfaces.types import __all__; assert len(__all__) == 16"`
-- [ ] **AC-SDD-02**：接口 Protocol 数量 = 8 + Hook 函数类型 = 9
-  - **验证**：`python -c "from harness.interfaces import __all__; assert len(__all__) == 27, f'Expected 27 items (16 types + 9 interface names + 2 contexts), got {len(__all__)}'"`
+- [ ] **AC-SDD-01**：正式类型数量 = 17（对照 `sdd/02-interfaces.md`，含新增的 `ToolTransform`）
+  - **验证**：`python -c "from harness.interfaces.types import __all__; assert len(__all__) == 17"`
+- [ ] **AC-SDD-02**：接口 Protocol 数量 = 9，加 Hook 函数类型别名 = 10 个接口相关名称
+  - **验证**：`python -c "from harness.interfaces import __all__; assert len(__all__) == 29, f'Expected 29 items (17 types + 9 Protocols + 2 contexts + 1 Hook alias), got {len(__all__)}'"`
 - [ ] **AC-SDD-03**：所有测试中的类型使用与 SDD 字段定义一致（名称、类型、拼写）
   - **验证**：代码审查确认测试文件中无 SDD-broken 的类型引用

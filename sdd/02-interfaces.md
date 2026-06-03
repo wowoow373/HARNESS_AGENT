@@ -89,7 +89,7 @@ Example:
 AssemblyContext:
   user_request   : UserRequest         — 当前用户请求
   guides         : GuidesBundle        — 来自 GuideProvider
-  available_tools: List[ToolDefinition]— 来自 ToolRegistry（name, description, parameters）
+  available_tools: List[ToolDefinition]— 来自 ToolRouter（name, description, parameters）
   history        : List[Message]       — 当前会话的对话历史
   memories       : List[MemoryItem]    — 从 MemoryBackend 检索的记忆
   system_state   : SystemState         — 系统当前状态
@@ -157,7 +157,7 @@ ToolCallFunction:
 
 ### ToolDefinition
 
-Tool 的元信息，用于 LLM 的 tool schema 生成和 ToolRegistry 发现。
+Tool 的元信息，用于 LLM 的 tool schema 生成和 ToolRouter 发现。
 
 ```
 ToolDefinition:
@@ -190,6 +190,22 @@ ToolResult:
   content : Any                 — 成功时返回的工具结果
   error   : Optional[str]       — 失败时的错误信息
 ```
+
+### ToolTransform
+
+单个 MCP 工具的声明式转换配置。由用户在装配 MCPAdapter 时提供。
+
+```
+ToolTransform:
+  expose_as             : Optional[str]      — 重命名暴露（如 "filesystem_read" → "read_remote_file"）
+  description_override  : Optional[str]      — 覆盖工具描述使其更适配 LLM
+  hidden                : bool = False        — 设为 True 则该工具对 LLM 不可见
+  arg_defaults          : Dict[str, Any]      — 参数默认值注入（如注入 cwd、认证信息）
+  arg_transform         : Optional[Callable]  — 高级：程序化参数转换（优先于 arg_defaults）
+  result_transform      : Optional[Callable]  — 高级：程序化结果转换（脱敏、格式化等）
+```
+
+注：`arg_transform` 和 `result_transform` 为高级程序化转换钩子。当声明式配置（`expose_as`、`arg_defaults` 等）不够用时使用。两者均为可选，默认不启用。
 
 ### MemoryItem
 
@@ -343,7 +359,7 @@ class LoggingSensor:
 
 ### Tool
 
-职责：工具的实际执行层，被 ToolRegistry 统一调度。
+职责：单个工具的实际执行层，被 ToolRouter 统一调度。
 
 ```
 interface Tool:
@@ -352,51 +368,96 @@ interface Tool:
 ```
 
 调用时机：
-- `get_definition()`：会话初始化阶段（ToolRegistry 收集工具元信息）
+- `get_definition()`：会话初始化阶段（ToolRouter 通过 Provider 收集工具元信息）
 - `execute()`：运行时（LLM 请求执行工具时）
 
-设计要点：用户不直接实现 Tool 接口，通过 MCPManager 间接注入。
+设计要点：Tool 是实现细节，框架用户通过 SystemToolProvider 提供本地 Tool，通过 MCPAdapter 提供 MCP 来源 Tool。`BaseTool` ABC 和 `@inline_tool` 装饰器是辅助构建 Tool 实例的便利工具。
 
 ---
 
-### ToolRegistry
+### ToolRouter
 
-职责：管理所有 Tool 的注册、发现与调度执行。
+职责：框架内部组件（非 DI，不由用户替换）。合并 SystemToolProvider 和 MCPAdapter，维护 `tool_name → provider` 路由表，统一对外提供工具列表和按名分发执行。
 
 ```
-interface ToolRegistry:
-    register(tool: Tool) → void
+class ToolRouter:
+    _routes: Dict[str, ToolProvider]  # tool_name → provider
+
+    register_provider(provider: ToolProvider) → None
     list_tools() → List[ToolDefinition]
+    execute(name: str, args: Dict[str, Any]) → ToolResult
+    shutdown() → None
+```
+
+调用时机：
+- `register_provider()`：会话初始化阶段（编排器将已解析的 SystemToolProvider 和 MCPAdapter 注册进去）
+- `list_tools()`：会话初始化阶段（合并所有 Provider 的工具列表给 ContextAssembler）
+- `execute()`：运行时（LLM 请求执行工具时，查表分发到对应 Provider）
+- `shutdown()`：会话结束阶段（分发到各 Provider 清理，如 MCPAdapter 关闭 MCP Server 子进程连接）
+
+设计要点：
+- ToolRouter 由编排器在 `_phase_init()` 中直接实例化，不经过 DI 容器
+- 执行前后触发 `before_tool_execute` / `after_tool_execute` Hook
+- 同名工具后注册的覆盖先注册的，SystemToolProvider 先注册（MCPAdapter 可覆盖系统工具）
+
+---
+
+### SystemToolProvider
+
+职责：系统工具提供者 — 管理本地实现的 Tool 集合。DI 插件，用户可替换。
+
+```
+interface SystemToolProvider:
+    get_tools() → List[ToolDefinition]
     execute(name: str, args: Dict[str, Any]) → ToolResult
 ```
 
 调用时机：
-- `register()`：会话初始化阶段（系统 Tool + MCPManager 加载的 Tool）
-- `list_tools()`：会话初始化阶段（收集元信息给 ContextAssembler）
-- `execute()`：运行时（LLM 请求执行工具时）
+- `get_tools()`：会话初始化阶段（ToolRouter 收集工具元信息）
+- `execute()`：运行时（ToolRouter 按名路由到此处）
 
-设计要点：
-- 系统基础 Tool 直接注册到 ToolRegistry
-- MCPManager 加载的 Tool 也通过 register() 注入
-- 执行前后触发 `before_tool_execute` / `after_tool_execute` Hook
-- ToolRegistry 是框架内部组件（框架创建和管理），不作为用户可替换接口注册到 DI 容器
+默认实现：`DefaultSystemToolProvider` — 内置 `ReadFileTool`、`WriteFileTool`、`ShellTool`，用户可通过继承或装饰器（`@inline_tool`）扩展。
 
 ---
 
-### MCPManager
+### MCPAdapter
 
-职责：将用户的 MCP 配置（外部 Server、内联工具等）转换为框架可识别的 Tool 实例。
+职责：MCP 适配层 — 消费外部 MCP Server，经声明式/程序化转换后暴露工具。DI 插件，不注册即裁切 MCP 功能。
 
 ```
-interface MCPManager:
-    load_tools() → List[Tool]
+interface MCPAdapter:
+    get_tools() → List[ToolDefinition]
+    execute(name: str, args: Dict[str, Any]) → ToolResult
+    shutdown() → None
 ```
 
-调用时机：框架会话初始化阶段，仅调用一次。产出 Tool 列表后注册到 ToolRegistry。
+调用时机：
+- `get_tools()`：会话初始化阶段（通过内部 MCPClient 发现外部工具，经 ToolTransform 转换后返回）
+- `execute()`：运行时（ToolRouter 按名路由到此处，内部经 MCPHandler 程序化转换后执行）
+- `shutdown()`：会话结束阶段（关闭 MCP Server 子进程连接）
 
-实现示例：
-- `ServerMCPManager` — 连接外部 MCP Server（stdio/SSE），转换其暴露的工具
-- `InlineMCPManager` — 将用户在代码中注册的内联函数包装为框架 Tool
+默认实现：`DefaultMCPAdapter` — 接收 `MCPServerConfig` 列表和 `ToolTransform` 字典，管理 MCPClient 子进程生命周期和转换管道。
+
+内部转换管道（两级）：
+1. **ToolTransform（声明式）**：改名（`expose_as`）、隐藏（`hidden`）、注入默认值（`arg_defaults`），覆盖 90% 场景
+2. **MCPHandler（程序化）**：当声明式不够用时提供 `transform_args` / `transform_result` 钩子
+
+---
+
+### MCPHandler
+
+职责：MCP 程序化转换处理器 — 当 ToolTransform 声明式配置不够用时，提供 `transform_schema` / `transform_args` / `transform_result` 三个钩子进行程序化转换。
+
+```
+interface MCPHandler:
+    transform_schema(name: str, schema: Dict) → Dict
+    transform_args(name: str, args: Dict) → Dict
+    transform_result(name: str, result: Any) → Any
+```
+
+调用时机：在 MCPAdapter 内部调用，分别对应 schema 获取、工具执行前参数转换、工具执行后结果转换三个阶段。
+
+设计要点：MCPHandler 是可选的。用户实现此 Protocol 后注入到 `DefaultMCPAdapter` 的 `handler` 参数。典型用例：统一认证注入（`transform_args` 中注入 token）、动态结果脱敏（`transform_result` 中过滤敏感字段）。
 
 ---
 
@@ -448,8 +509,9 @@ Hook 点列表（事件名 → data 类型），共 **11 个**：
 - **记忆检索双模式**：框架在每轮外层循环前自动执行基线检索（`namespace="episodic"`）并填入 `AssemblyContext.memories`；ContextAssembler 可通过构造注入的 MemoryBackend 执行额外定制检索（跨 namespace、不同 query 策略），此时自行决定如何使用/合并/忽略框架基线结果
 - GuidesBundle、available_tools 在初始化阶段获取后**缓存复用**，不随每轮重新构建
 - 内层循环（tool_use 连续生成）**不走 ContextAssembler.assemble()**，tool result 直接追加到 message list
-- 多 Tool 场景下，ToolRegistry **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook
-- MCPManager 只在初始化工作一次，运行时不再参与
+- 多 Tool 场景下，ToolRouter **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook
+- SystemToolProvider 和 MCPAdapter 是独立的 DI 插件，各自可通过 DI 注册或替换
+- MCPAdapter 不注册即裁切 MCP 功能，编排器正常降级
 - LLM 单次响应可同时包含 text 和 tool_uses，框架分别处理两者
 - 框架内部包含轻量转换层：将 Message、ToolDefinition、ToolResult 与 LLM 原生格式互转
 - DI 容器采用**预构造实例注册**模式：`container.register(Interface, instance)`，用户手动管理依赖注入

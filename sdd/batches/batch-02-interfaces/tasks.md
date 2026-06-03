@@ -6,7 +6,7 @@
 
 ---
 
-## 阶段 1：types.py — 16 个大包对象
+## 阶段 1：types.py — 17 个大包对象
 
 **文件**：`harness/interfaces/types.py`
 
@@ -81,15 +81,15 @@
 ### 1.3 文件收尾
 
 - [ ] 1.3.1 在文件顶部添加 `from __future__ import annotations`
-- [ ] 1.3.2 添加 `__all__` 导出列表，包含全部 16 个类型
+- [ ] 1.3.2 添加 `__all__` 导出列表，包含全部 17 个类型
 - [ ] 1.3.3 每个 dataclass 添加 docstring
 - [ ] 1.3.4 确认 `types.py` 不 import 项目的任何其他模块（它是纯数据类型层）
 
 ---
 
-## 阶段 2：9 个接口文件
+## 阶段 2：10 个接口文件（9 Protocol + 1 Hook 类型别名）
 
-### 2.1 Tool（优先，被 tool_registry 和 mcp_manager 依赖）
+### 2.1 Tool（优先，被 system_tool_provider 和 mcp_adapter 依赖）
 
 **文件**：`harness/interfaces/tool.py`
 
@@ -132,21 +132,29 @@
 - [ ] 2.2.6 定义 `Sensor` Protocol，`@runtime_checkable`
   - `sense(self, trajectory: Trajectory) -> None`
 
-**文件**：`harness/interfaces/tool_registry.py`
+**文件**：`harness/interfaces/system_tool_provider.py`
 
-- [ ] 2.2.7 定义 `ToolRegistry` Protocol，`@runtime_checkable`
-  - `register(self, tool: Tool) -> None`
-  - `list_tools(self) -> List[ToolDefinition]`
+- [ ] 2.2.7 定义 `SystemToolProvider` Protocol，`@runtime_checkable`
+  - `get_tools(self) -> List[ToolDefinition]`
   - `execute(self, name: str, args: Dict[str, Any]) -> ToolResult`
 
-**文件**：`harness/interfaces/mcp_manager.py`
+**文件**：`harness/interfaces/mcp_adapter.py`
 
-- [ ] 2.2.8 定义 `MCPManager` Protocol，`@runtime_checkable`
-  - `load_tools(self) -> List[Tool]`
+- [ ] 2.2.8 定义 `MCPAdapter` Protocol，`@runtime_checkable`
+  - `get_tools(self) -> List[ToolDefinition]`
+  - `execute(self, name: str, args: Dict[str, Any]) -> ToolResult`
+  - `shutdown(self) -> None`
+
+**文件**：`harness/interfaces/mcp_handler.py`
+
+- [ ] 2.2.9 定义 `MCPHandler` Protocol，`@runtime_checkable`
+  - `transform_schema(self, name: str, schema: Dict) -> Dict`
+  - `transform_args(self, name: str, args: Dict) -> Dict`
+  - `transform_result(self, name: str, result: Any) -> Any`
 
 **文件**：`harness/interfaces/hook.py`
 
-- [ ] 2.2.9 定义 `HookContext` dataclass
+- [ ] 2.2.10 定义 `HookContext` dataclass
   - 字段：`event: str`, `data: Any`, `system_state: SystemState`
   - 默认值：`event = ""`, `data = None`, `system_state = field(default_factory=SystemState)`
 - [ ] 2.2.10 定义 `Hook` 类型别名
@@ -158,21 +166,21 @@
 
 **文件**：`harness/interfaces/__init__.py`
 
-> **注意**：本阶段仅给出了 re-export 的概要说明。如需完整的导入清单（30+ 条精确的 `from .xxx import YYY` 语句），请参考 [sdd/02-interfaces.md](../../02-interfaces.md) §通用大包对象 和 §组件接口，那里列出了每个类型的完整字段定义和每个接口的完整方法签名。也可对照 [design.md](design.md) §三 的 16 类型字段表和 §四 的 9 接口代码片段逐一确认。
+> **注意**：本阶段仅给出了 re-export 的概要说明。如需完整的导入清单（30+ 条精确的 `from .xxx import YYY` 语句），请参考 [sdd/02-interfaces.md](../../02-interfaces.md) §通用大包对象 和 §组件接口，那里列出了每个类型的完整字段定义和每个接口的完整方法签名。也可对照 [design.md](design.md) §三 的 17 类型字段表和 §四 的 10 接口文件代码片段逐一确认。
 
 - [ ] 3.1 删除 8 个空占位类定义
 - [ ] 3.2 从各子模块 re-export 正式类型：
-  - 从 `types.py`：全部 16 个大包对象
+  - 从 `types.py`：全部 17 个大包对象
   - 从各接口文件：全部 9 个 Protocol 类 + `GuideContext` + `HookContext` + `Hook`
 - [ ] 3.3 更新模块 docstring
 - [ ] 3.4 定义 `__all__` 导出列表：
-  - 16 个类型 + 9 个 Protocol + 2 个辅助类型 (GuideContext, HookContext) + 1 个类型别名 (Hook)
+  - 17 个类型 + 9 个 Protocol + 2 个辅助类型 (GuideContext, HookContext) + 1 个类型别名 (Hook)
 
 ---
 
 ## 阶段 4：验证（不运行测试，纯静态检查）
 
-- [ ] 4.1 验证 `python -c "from harness.interfaces import InputAdapter, GuideProvider, ContextAssembler, MemoryBackend, Sensor, Tool, ToolRegistry, MCPManager"` 不报错
+- [ ] 4.1 验证 `python -c "from harness.interfaces import InputAdapter, GuideProvider, ContextAssembler, MemoryBackend, Sensor, Tool, SystemToolProvider, MCPAdapter, MCPHandler"` 不报错
 - [ ] 4.2 验证 `python -c "from harness.interfaces.types import UserRequest, SystemState, Attachment, EnvState, GuidesBundle, Example, AssemblyContext, Trajectory, Message, Response, ToolCall, ToolCallFunction, ToolDefinition, ToolCallRecord, ToolResult, MemoryItem"` 不报错
 - [ ] 4.3 验证 `orchestrator.py` 中 `from ..interfaces import InputAdapter, ...` 仍然有效
 - [ ] 4.4 验证 `di.py` 中 `from .core.orchestrator import InputAdapter` 仍然有效

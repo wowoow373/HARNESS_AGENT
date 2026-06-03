@@ -250,7 +250,7 @@
 - [ ] **AC-ORCH-02**：InputAdapter 缺失时 `_phase_init()` 抛出异常
   - **验证**：`container` 中无 InputAdapter → `orch._phase_init()` 抛出 `ComponentNotRegisteredError`
 
-- [ ] **AC-ORCH-03**：可选组件（GuideProvider、MemoryBackend、ToolRegistry、Sensor）缺失时不阻塞流程
+- [ ] **AC-ORCH-03**：可选组件（GuideProvider、MemoryBackend、SystemToolProvider、MCPAdapter、Sensor）缺失时不阻塞流程
   - **验证**：所有可选组件缺失 → `_phase_init()`, `_phase_loop()`, `_phase_end()` 均不抛异常
 
 - [ ] **AC-ORCH-04**：单轮对话（text 响应）正确执行
@@ -272,7 +272,7 @@
     ```
 
 - [ ] **AC-ORCH-06**：tool_use 循环正确处理（无 text，纯 tool_use → 再次 LLM → text）
-  - **场景**：LLM 第一响应仅含 tool_use（无 text）→ ToolRegistry 执行 → tool result 追加到 messages → 再次调用 LLM → LLM 第二响应含 text → 用户收到
+  - **场景**：LLM 第一响应仅含 tool_use（无 text）→ ToolRouter 执行 → tool result 追加到 messages → 再次调用 LLM → LLM 第二响应含 text → 用户收到
   - **验证脚本**：
     ```python
     # 使用 mock call_llm: 第1次返回 tool_use, 第2次返回 text
@@ -293,7 +293,7 @@
 
     # 验证
     assert call_count[0] == 2  # LLM 被调用了 2 次（内层循环）
-    assert len(tr.executed) == 1  # ToolRegistry 执行了 1 次
+    assert len(tr.executed) == 1  # SystemToolProvider 执行了 1 次
     assert orch._tool_call_records[0]["tool_name"] == "read"
     assert orch._tool_call_records[0]["error"] is None  # 执行成功
     # 最终用户收到了 text 响应
@@ -342,11 +342,11 @@
     ```
 
 - [ ] **AC-ORCH-09**：Tool 执行失败时错误信息完整保留（不丢失）
-  - **场景**：ToolRegistry.execute() 返回 `success=False`
+  - **场景**：ToolRouter.execute() 返回 `success=False`
   - **验证脚本**：
     ```python
-    class FailingTR:
-        def list_tools(self): return []
+    class FailingSP:
+        def get_tools(self): return []
         def execute(self, name, args):
             class TR:
                 success = False
@@ -360,8 +360,8 @@
     # tool result message 中的 content 应包含错误信息（让 LLM 看到）
     ```
 
-- [ ] **AC-ORCH-10**：tool_use 的 JSON arguments 被正确 parse 后传给 ToolRegistry
-  - **验证**：`_MinimalToolCall(arguments='{"path":"/x","mode":"r"}')` → ToolRegistry.execute() 收到的是 `{"path":"/x","mode":"r"}` 这个 dict，而不是 JSON string
+- [ ] **AC-ORCH-10**：tool_use 的 JSON arguments 被正确 parse 后传给 ToolRouter
+  - **验证**：`_MinimalToolCall(arguments='{"path":"/x","mode":"r"}')` → ToolRouter.execute() 收到的是 `{"path":"/x","mode":"r"}` 这个 dict，而不是 JSON string
 
 - [ ] **AC-ORCH-11**：空输入正确触发退出
   - **输入**：`_MinimalUserRequest(text="")`
@@ -589,7 +589,7 @@
       - GuideProvider (mock)
       - MemoryBackend (mock)
       - ContextAssembler (mock)
-      - ToolRegistry (mock)
+      - SystemToolProvider (mock)
       - Sensor (mock)
 
     Harness.from_container() → run()
@@ -616,7 +616,7 @@
 - [ ] **AC-EDGE-04**：ConfigLoader 处理仅有注释的 TOML 文件，抛出 `ConfigValidationError`（缺少 `[meta]`）
 - [ ] **AC-EDGE-05**：ConfigLoader 处理超大 TOML 文件（10MB+），正常解析
 - [ ] **AC-EDGE-06**：LifecycleOrchestrator.call_llm 为 None 时，`_phase_loop` 不崩溃，跳出内层循环
-- [ ] **AC-EDGE-07**：ToolRegistry 未注册时，tool_use 响应不崩溃（跳过工具执行，记录 WARNING）
+- [ ] **AC-EDGE-07**：SystemToolProvider 和 MCPAdapter 均未注册时，tool_use 响应不崩溃（跳过工具执行，记录 WARNING）
 - [ ] **AC-EDGE-08**：Sensor 未注册时，`_phase_end()` 不崩溃（跳过 sense 调用）
 - [ ] **AC-EDGE-09**：多个 Tool 串行执行时，每个 Tool 独立记录执行结果
 - [ ] **AC-EDGE-10**：`_should_exit()` 中 text 为仅空白字符（空格、tab）时，视为空输入并退出

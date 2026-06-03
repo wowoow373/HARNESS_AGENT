@@ -69,7 +69,7 @@ batch-02 已通过 `Protocol` + `@runtime_checkable` 定义了组件的方法签
 
 `Message` ↔ `dict` 和 `ToolDefinition` → OpenAI format 的转换逻辑放在 `messaging/builder.py`，与已有的 `build_assistant_message()`、`build_tool_result_message()` 形成统一的"框架类型 ↔ OpenAI 格式"转换层。
 
-**这不是在实现 ContextAssembler 或 ToolRegistry 的功能** — 它是纯格式转换，不涉及"上下文里放什么"或"工具有哪些"的决策逻辑。
+**这不是在实现 ContextAssembler 或 SystemToolProvider/MCPAdapter 的功能** — 它是纯格式转换，不涉及"上下文里放什么"或"工具有哪些"的决策逻辑。
 
 ### 2.4 `_history` 类型：`List[Dict]` → `List[Message]`
 
@@ -310,7 +310,7 @@ def _should_exit(self, user_request: UserRequest) -> bool:
 |------|--------------|---------|
 | 正式类型无处不在的使用 | batch-03 ~ 09 | 所有组件实现直接使用正式类型，无需 `_normalize_*` |
 | `Message ↔ dict` 转换 | batch-05 (ContextAssembler) | ContextAssembler 返回 `List[Message]`，编排器自动转换 |
-| `ToolDefinition → OpenAI` 转换 | batch-06 (Tool/MCP) | ToolRegistry/MCPManager 返回正式类型，编排器自动包装 |
+| `ToolDefinition → OpenAI` 转换 | batch-06 (Tool/MCP) | SystemToolProvider/MCPAdapter 返回正式类型，ToolRouter 合并后编排器自动包装 |
 | 废弃的 `_Minimal*` 类型 | _(无)_ | 后续批次可安全忽略 |
 
 ### 7.3 类型世界的终态

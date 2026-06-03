@@ -851,7 +851,7 @@ assert resp.tool_uses[0].parse_arguments() == {"cmd": "ls"}
 1. 解析 `InputAdapter` → 调用 `receive()` → 获取 `UserRequest`
 2. 解析 `GuideProvider` → 构建 `GuideContext` → 调用 `get_guides()` → 缓存 `GuidesBundle`
 3. 解析 `MemoryBackend` → 调用 `search()` → 获取相关记忆
-4. 解析 `ToolRegistry` → 调用 `list_tools()` → 缓存工具列表
+4. 创建 `ToolRouter`，可选解析 `SystemToolProvider` 和 `MCPAdapter` → `register_provider()` → 调用 `list_tools()` → 缓存工具列表
 5. 构建并返回 `_MinimalAssemblyContext`
 
 ```python
@@ -877,11 +877,16 @@ def _phase_init(self) -> _MinimalAssemblyContext:
     if memory:
         memories = memory.search(user_request.text, "episodic")
 
-    # 4. ToolRegistry（可选）
+    # 4. ToolRouter（框架内部，非 DI）+ SystemToolProvider / MCPAdapter（可选 DI 插件）
     available_tools = []
-    tool_registry = self._resolve_optional(ToolRegistry)
-    if tool_registry:
-        available_tools = tool_registry.list_tools()
+    self._tool_router = ToolRouter()
+    sys_provider = self._resolve_optional(SystemToolProvider)
+    if sys_provider:
+        self._tool_router.register_provider(sys_provider)
+    mcp_adapter = self._resolve_optional(MCPAdapter)
+    if mcp_adapter:
+        self._tool_router.register_provider(mcp_adapter)
+    available_tools = self._tool_router.list_tools()
     self._cached_tools = available_tools
 
     # 5. 构建 AssemblyContext
@@ -944,7 +949,7 @@ _phase_loop(initial_ctx):
     ctx = initial_ctx
     assembler = _resolve_optional(ContextAssembler)
     adapter = container.resolve(InputAdapter)
-    tool_registry = _resolve_optional(ToolRegistry)
+    tool_router = self._tool_router  # 在 _phase_init 中已初始化并注册 Provider
 
     while not _should_exit_flag:
         # === 外层：组装上下文 ===
@@ -974,7 +979,7 @@ _phase_loop(initial_ctx):
                     before_ts = time.time()
                     try:
                         args = tc.parse_arguments()  # JSON string → dict
-                        result = tool_registry.execute(tc.name, args)
+                        result = tool_router.execute(tc.name, args)
                         after_ts = time.time()
                     except Exception as e:
                         result = ToolResult(success=False, error=str(e))
@@ -1106,7 +1111,7 @@ def _build_tool_result_message(
 |------|------|
 | tool_uses 中 arguments 保持 JSON string，执行时 parse | 与 OpenAI 原生格式一致；编排器不提前解析 |
 | 工具执行失败时 `result.error` 不为 None，仍追加到 messages | LLM 需要看到错误来修正行为 |
-| tool_uses 存在但 ToolRegistry 未注册时仍追加 assistant_msg | 保留完整轨迹，tool result 使用 error 信息 |
+| tool_uses 存在但 ToolRouter 无可用 Provider 时仍追加 assistant_msg | 保留完整轨迹，tool result 使用 error 信息 |
 | text + tool_uses 共存时先执行 tools，再发 text | tools 结果保留在 messages 中供后续轮次；text 立即告知用户 |
 | 内层循环不重新走 ContextAssembler | 架构要求：tool_use 链中上下文不重新组装 |
 
@@ -1164,10 +1169,10 @@ class MockAdapter2:
         return _MinimalUserRequest(text="")
     def send(self, r): self.outputs.append(r.text)
 
-class MockToolRegistry:
+class MockSystemToolProvider:
     def __init__(self):
         self.executed = []
-    def list_tools(self):
+    def get_tools(self):
         return [{"name": "read", "description": "Read a file", "parameters": {...}}]
     def execute(self, name, args):
         self.executed.append((name, args))
@@ -1180,7 +1185,7 @@ class MockToolRegistry:
         return TR()
 
 container2.register(InputAdapter, MockAdapter2())
-container2.register(ToolRegistry, MockToolRegistry())
+container2.register(SystemToolProvider, MockSystemToolProvider())
 
 call_count = [0]
 def tool_then_text_llm(msgs, tools):
@@ -1203,10 +1208,10 @@ orch2._cached_tools = []
 ctx2 = orch2._phase_init()
 orch2._phase_loop(ctx2)
 
-# 验证 tool 被执行
-tr = container2.resolve(ToolRegistry)
-assert len(tr.executed) == 1
-assert tr.executed[0] == ("read", {"path": "/tmp/x"})
+# 验证 tool 被执行（通过 SystemToolProvider 的 mock）
+sp = container2.resolve(SystemToolProvider)
+assert len(sp.executed) == 1
+assert sp.executed[0] == ("read", {"path": "/tmp/x"})
 
 # 验证 LLM 被调用了 2 次
 assert call_count[0] == 2
@@ -1236,10 +1241,10 @@ class MockAdapter3:
         return _MinimalUserRequest(text="")
     def send(self, r): self.outputs.append(r.text)
 
-class MockTR3:
+class MockSP3:
     def __init__(self):
         self.executed = []
-    def list_tools(self): return []
+    def get_tools(self): return []
     def execute(self, name, args):
         self.executed.append((name, args))
         class TR:
@@ -1247,7 +1252,7 @@ class MockTR3:
         return TR()
 
 container3.register(InputAdapter, MockAdapter3())
-container3.register(ToolRegistry, MockTR3())
+container3.register(SystemToolProvider, MockSP3())
 
 def coexistence_llm(msgs, tools):
     # 单次响应同时包含 text 和 tool_uses
@@ -1266,8 +1271,8 @@ ctx3 = orch3._phase_init()
 orch3._phase_loop(ctx3)
 
 # 验证 tool 被执行了
-tr3 = container3.resolve(ToolRegistry)
-assert len(tr3.executed) == 1
+sp3 = container3.resolve(SystemToolProvider)
+assert len(sp3.executed) == 1
 
 # 验证 text 被发送给用户
 adapter3 = container3.resolve(InputAdapter)

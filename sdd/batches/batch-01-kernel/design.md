@@ -139,42 +139,48 @@ _registry: Dict[type, Any] = {}   # interface_type → instance
   │ 6. MemoryBackend.search(                   │
   │      user_request.text, "episodic")         │
   │    → List[MemoryItem] (填入 AssemblyContext)│
-  │ 7. 从容器 resolve(ToolRegistry)            │
-  │ 8. ToolRegistry.list_tools()                │
+  │ 7. 创建 ToolRouter（框架内部）              │
+  │ 8. 从容器 resolve_optional(                 │
+  │      SystemToolProvider)                     │
+  │    → ToolRouter.register_provider()          │
+  │ 9. 从容器 resolve_optional(MCPAdapter)       │
+  │    → ToolRouter.register_provider()          │
+  │ 10. ToolRouter.list_tools()                  │
   │    → List[ToolDefinition] (缓存)            │
-  │ 9. 构建初始 AssemblyContext                 │
+  │ 11. 构建初始 AssemblyContext                 │
   └────────────────────────────────────────────┘
                     ↓
 阶段二：多轮对话循环（Conversation Loop）
   ┌────────────────────────────────────────────┐
   │ 外层循环（每轮用户输入触发）：              │
-  │   10. 从容器 resolve(ContextAssembler)      │
-  │   11. ContextAssembler.assemble(            │
+  │   12. 从容器 resolve(ContextAssembler)      │
+  │   13. ContextAssembler.assemble(            │
   │         assembly_context) → List[Message]   │
-  │   12. 调用 LLM (外部注入) → Response        │
+  │   14. 调用 LLM (外部注入) → Response        │
   │                                             │
   │   内层循环（Tool call 连续生成）：           │
-  │     13. 判断 Response 内容：                │
-  │         - tool_uses → ToolRegistry.execute()│
+  │     15. 判断 Response 内容：                │
+  │         - tool_uses → ToolRouter.execute()  │
   │           → 结果追加到 message list         │
-  │           → 回到步骤 12                     │
+  │           → 回到步骤 14                     │
   │         - text → InputAdapter.send()        │
   │           → 跳出内层循环                    │
   │                                             │
-  │   14. 等待下一轮用户输入：                   │
+  │   16. 等待下一轮用户输入：                   │
   │       InputAdapter.receive()                │
   │       → 更新 AssemblyContext                │
-  │       → 回到步骤 10                         │
+  │       → 回到步骤 12                         │
   │                                             │
-  │   15. 退出信号 → 进入阶段三                 │
+  │   17. 退出信号 → 进入阶段三                 │
   └────────────────────────────────────────────┘
                     ↓
 阶段三：会话结束（Session End）
   ┌────────────────────────────────────────────┐
-  │ 16. 组装完整 Trajectory                     │
-  │ 17. 从容器 resolve(Sensor)                 │
-  │ 18. Sensor.sense(trajectory) → void        │
-  │ 19. 会话结束清理                            │
+  │ 18. 组装完整 Trajectory                     │
+  │ 19. 从容器 resolve(Sensor)                 │
+  │ 20. Sensor.sense(trajectory) → void        │
+  │ 21. ToolRouter.shutdown() → 分发清理       │
+  │ 22. 会话结束清理                            │
   └────────────────────────────────────────────┘
 ```
 
@@ -225,8 +231,10 @@ class LifecycleOrchestrator:
         1. resolve InputAdapter → receive() → UserRequest
         2. resolve GuideProvider → get_guides() → GuidesBundle
         3. resolve MemoryBackend → search() → List[MemoryItem]
-        4. resolve ToolRegistry → list_tools() → List[ToolDefinition]
-        5. 构建并返回 AssemblyContext
+        4. 创建 ToolRouter（框架内部），resolve_optional SystemToolProvider → register_provider
+        5. resolve_optional MCPAdapter → register_provider
+        6. ToolRouter.list_tools() → List[ToolDefinition]
+        7. 构建并返回 AssemblyContext
 
         产出的 AssemblyContext 被缓存，供 _phase_loop 使用。
         """
@@ -242,7 +250,7 @@ class LifecycleOrchestrator:
         内层循环（同一轮内 tool_use 连续生成）：
           3. self.call_llm(messages, tools) → Response
           4. 处理 Response（注意：text 和 tool_uses 可共存）：
-             a. 如有 tool_uses → 每个 tool 经 ToolRegistry 串行执行
+             a. 如有 tool_uses → 每个 tool 经 ToolRouter 串行执行
                 → tool_use + tool_result 追加到 messages 尾部
              b. 如有 text → 追加 assistant message 到 messages
                 → InputAdapter.send(response)
@@ -363,7 +371,7 @@ class _MinimalToolCall:
 
 LLM 返回: Response(tool_uses=[ToolCall(id="c1", name="read", ...)], text=None)
   → 编排器构造 assistant message（含 tool_calls 块）→ 追加到 messages
-  → 编排器调用 ToolRegistry.execute("read", parsed_args) → ToolResult
+  → 编排器调用 ToolRouter.execute("read", parsed_args) → ToolResult
   → 编排器构造 tool result message → 追加到 messages
 
 第 N+1 次 LLM 调用前 messages:
@@ -402,8 +410,8 @@ if not response.tool_uses and not response.text:
 |------|------|
 | LLM 调用通过 `call_llm` 可调用对象注入 | 编排器不绑定任何 LLM SDK，测试时可用 mock |
 | Messages 用 dict 格式（OpenAI 兼容） | 通用性最强，大多数 LLM SDK 原生支持 |
-| Tool arguments 保持 JSON string 格式 | 与 OpenAI tool call 格式一致，编排器在调用 ToolRegistry 时 parse |
-| GuidesBundle/available_tools 在阶段一获取后缓存 | 避免每轮重复调用 GuideProvider 和 ToolRegistry |
+| Tool arguments 保持 JSON string 格式 | 与 OpenAI tool call 格式一致，编排器在调用 ToolRouter 时 parse |
+| GuidesBundle/available_tools 在阶段一获取后缓存 | 避免每轮重复调用 GuideProvider 和 ToolRouter.list_tools() |
 | 外层/内层循环分离 | 外层对应"用户新输入"，内层对应"tool_use 连续链" |
 | text+tool_uses 共存时先执行 tools 再发送 text | 保持 messages 完整性，同时不阻塞用户看到响应 |
 | 退出判断放在外层循环末尾 | 用户在每轮结束后决定继续或退出 |

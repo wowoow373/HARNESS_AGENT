@@ -125,7 +125,7 @@
 - ❌ 不验证 Token 计数截断（batch-05 只做消息计数滑动窗口）
 - ❌ 不验证消息摘要/压缩（summarization）
 - ❌ 不验证编排器中 ContextAssembler 的实际调用（编排器已有调用逻辑，batch-05 只提供实现）
-- ❌ 不验证与 ToolRegistry 的集成（ToolRegistry 在 batch-06）
+- ❌ 不验证与 ToolRouter / SystemToolProvider / MCPAdapter 的集成（在 batch-06）
 - ❌ 不验证与 Sensor 的集成（Sensor 在 batch-07）
 - ❌ 不验证复杂的 prompt 模板引擎（batch-05 使用硬编码模板）
 - ❌ 不验证 RAG 或 embedding-based 检索

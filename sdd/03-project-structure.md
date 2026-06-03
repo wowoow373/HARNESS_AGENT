@@ -39,6 +39,7 @@ harness_agent/
 - DI 容器实现
 - 事件总线实现
 - 生命周期编排器（按固定顺序调用组件的方法）
+- ToolRouter（框架内部，合并 SystemToolProvider/MCPAdapter，按名路由执行）
 - 内部数据类型定义
 
 **不放什么：**
@@ -69,15 +70,16 @@ harness/interfaces/
 ├── types.py                  # 所有大包对象（UserRequest, SystemState, Attachment, EnvState,
 │                             #   GuidesBundle, Example, AssemblyContext, Trajectory,
 │                             #   Message, Response, ToolCall, ToolCallFunction,
-│                             #   ToolDefinition, ToolCallRecord, ToolResult, MemoryItem）
+│                             #   ToolDefinition, ToolCallRecord, ToolResult, ToolTransform, MemoryItem）
 ├── input_adapter.py          # InputAdapter 接口
 ├── guide_provider.py         # GuideProvider 接口 + GuideContext
 ├── context_assembler.py      # ContextAssembler 接口
 ├── memory_backend.py         # MemoryBackend 接口
 ├── sensor.py                 # Sensor 接口
 ├── tool.py                   # Tool 接口
-├── tool_registry.py          # ToolRegistry 接口
-├── mcp_manager.py            # MCPManager 接口
+├── system_tool_provider.py   # SystemToolProvider 接口
+├── mcp_adapter.py            # MCPAdapter 接口
+├── mcp_handler.py            # MCPHandler 接口
 └── hook.py                   # Hook 接口 + HookContext
 ```
 
@@ -115,11 +117,14 @@ harness/components/
 │   └── logging_sensor.py         # LoggingSensor（默认实现，构造注入 MemoryBackend）
 ├── mcp_manager/
 │   ├── __init__.py
-│   ├── server_mcp_manager.py     # ServerMCPManager（默认实现）
-│   └── inline_mcp_manager.py     # InlineMCPManager（默认实现）
+│   ├── default_mcp_adapter.py    # DefaultMCPAdapter（默认实现，含 ToolTransform + MCPHandler 管道）
+│   └── mcp_client.py             # MCPClient（stdio/SSE 子进程管理）
 └── tool/
     ├── __init__.py
-    └── system_tools.py           # 系统基础 Tool（文件读写、搜索等）
+    ├── base.py                   # BaseTool ABC（Tool 的便利基类）
+    ├── inline_tool.py            # @inline_tool 装饰器（将函数快速转为 Tool）
+    ├── system_tools.py           # 系统基础 Tool（ReadFileTool、WriteFileTool、ShellTool）
+    └── default_system_tool_provider.py  # DefaultSystemToolProvider（默认实现）
 ```
 
 ---
@@ -168,8 +173,9 @@ tests/
 ├── test_context_assembler.py
 ├── test_md_memory.py
 ├── test_sensor.py
-├── test_tool_registry.py
-├── test_mcp_manager.py
+├── test_system_tool_provider.py
+├── test_mcp_adapter.py
+├── test_tool_router.py
 ├── test_hooks.py
 ├── test_di.py
 └── test_integration.py          # 端到端集成测试

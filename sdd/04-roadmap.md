@@ -14,7 +14,7 @@
 | 03 | memory-backend | MemoryBackend 接口 + MdMemory 实现 | 02-1 | `harness/components/memory_backend/` |
 | 04 | guide-provider | GuideProvider 接口 + FileGuideProvider 实现 | 02-1 | `harness/components/guide_provider/` |
 | 05 | context-assembler | ContextAssembler 接口 + SimpleAssembler 实现 | 02-1, 03, 04 | `harness/components/context_assembler/` |
-| 06 | tool-mcp-manager | Tool 抽象 + ToolRegistry + MCPManager + 系统基础 Tool | 02-1 | `harness/components/tool/`, `harness/components/mcp_manager/` |
+| 06 | tool-mcp-manager | Tool 抽象 + SystemToolProvider + MCPAdapter + MCPHandler + ToolRouter(框架内部) + 系统基础 Tool，删除 ToolRegistry/MCPManager | 02-1 | `harness/components/tool/`, `harness/components/mcp_manager/`, `harness/core/tool_router.py` |
 | 07 | sensor | Sensor 接口 + LoggingSensor 实现 | 02-1, 03 | `harness/components/sensor/` |
 | 08 | input-adapter | InputAdapter 接口 + CliAdapter 实现 | 02-1 | `harness/components/input_adapter/` |
 | 09 | hooks | Hook 系统（注册、链式调用、所有 Hook 点） | 01 | `harness/hooks/*` |
@@ -35,7 +35,7 @@
     ↓
     ├── 03-memory-backend     ← 依赖 02-1（MemoryBackend 接口、MemoryItem 类型）
     ├── 04-guide-provider     ← 依赖 02-1（GuideProvider 接口、GuidesBundle 等类型）
-    ├── 06-tool-mcp-manager   ← 依赖 02-1（Tool/ToolRegistry/MCPManager 接口）
+    ├── 06-tool-mcp-manager   ← 依赖 02-1（Tool/SystemToolProvider/MCPAdapter/MCPHandler 接口）
     ├── 07-sensor             ← 依赖 02-1（Sensor 接口、Trajectory 类型）
     │                            + 依赖 03（MemoryBackend 实例用于写入）
     ├── 08-input-adapter      ← 依赖 02-1（InputAdapter 接口、UserRequest 类型）
@@ -141,10 +141,17 @@
 ### 06 — tool-mcp-manager（工具系统）
 
 **范围：**
-- `Tool` 抽象类 + `ToolDefinition` / `ToolResult` 类型
-- `ToolRegistry` 实现：register / list_tools / execute
-- `MCPManager` 接口 + `ServerMCPManager` + `InlineMCPManager`
-- 至少一个系统基础 Tool（如文件读取工具）
+- `Tool` Protocol — 保留，单个工具的契约（`get_definition()` + `execute()`）
+- `BaseTool` ABC — 保留，便利基类；`@inline_tool` 装饰器 — 保留
+- `SystemToolProvider` Protocol + `DefaultSystemToolProvider`（内置 ReadFileTool、WriteFileTool、ShellTool）
+- `MCPAdapter` Protocol — 消费外部 MCP Server，经转换后暴露工具（替代旧的 MCPManager）
+- `MCPHandler` Protocol — 程序化转换处理器（schema/args/result 三阶段钩子）
+- `ToolTransform` dataclass — 声明式转换配置（rename/hide/defaults/高级钩子）
+- `ToolRouter` — 框架内部组件（非 DI），合并 Provider、维护路由表、按名分发
+- `DefaultMCPAdapter` — 默认 MCPAdapter 实现，含 MCPClient 子进程管理和 ToolTransform 管道
+- `DefaultSystemToolProvider` — 默认 SystemToolProvider，内置系统工具，支持通过 `@inline_tool` 扩展
+- **删除**：`ToolRegistry` Protocol、`MCPManager` Protocol、`DefaultToolRegistry`、`DefaultMCPManager`、`ServerMCPManager`、`InlineMCPManager`
+- 编排器 `_phase_init()` / `_phase_loop()` / `_phase_end()` 适配 ToolRouter
 - 单元测试
 
 ---
