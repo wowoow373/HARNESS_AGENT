@@ -104,9 +104,9 @@ AssemblyContext:
 
 ```
 Trajectory:
-  user_request   : UserRequest         — 用户原始请求
-  history        : List[Message]       — 完整对话历史（含思考过程、工具调用）
-  tool_calls     : List[ToolCallRecord]— 所有工具调用记录与执行结果
+  session_id     : str                  — 会话标识
+  history        : List[Message]       — 完整事件流: user → assistant(+tool_calls) → tool_result → assistant(text) → ...
+  tool_calls     : List[ToolCallRecord]— 所有工具调用记录与执行结果（通过 tool_call_id 与 history 中的 ToolCall 对齐）
   final_output   : str                 — Agent 最终输出
   execution_time : float               — 执行耗时（秒）
   system_state   : SystemState         — 系统当前状态
@@ -115,13 +115,14 @@ Trajectory:
 
 ### Message
 
-对话消息单元。这是面向用户实现的简化抽象层，框架内部会将其转换为 LLM 原生格式（包括 tool_use blocks、tool_result blocks、tool_call_id 等）。
+对话消息单元。history 中的完整事件流通过 Message 表达：user 文本消息、assistant 文本消息（可携带 tool_calls）、tool 执行结果消息。
 
 ```
 Message:
   role         : str   — "system" | "user" | "assistant" | "tool"
   content      : str   — 消息文本内容
-  tool_call_id : Optional[str] — 当 role="tool" 时，关联的 tool_use 标识
+  tool_call_id : Optional[str] — 当 role="tool" 时，关联的 ToolCall.id
+  tool_calls   : Optional[List[ToolCall]] — 当 role="assistant" 时，携带的并行工具调用列表
 ```
 
 ### Response
@@ -172,6 +173,7 @@ ToolDefinition:
 
 ```
 ToolCallRecord:
+  tool_call_id : str               — 关联的 ToolCall.id，用于与 history 对齐
   tool_name    : str
   arguments    : Dict[str, Any]
   result       : Any

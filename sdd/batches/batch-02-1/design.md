@@ -165,9 +165,9 @@ if user_request.text.strip() == "": # 仅空白字符
 
 | 旧字段 | 旧类型 | 新字段 | 新类型 | 迁移注意事项 |
 |--------|--------|--------|--------|-------------|
-| `user_request` | `Optional[_MinimalUserRequest]` | `user_request` | `Optional[UserRequest]` | 类型替换 |
-| `history` | `List[Dict[str, Any]]` | `history` | `List[Message]` | Dict → 对象 |
-| `tool_calls` | `List[Dict[str, Any]]` | `tool_calls` | `List[ToolCallRecord]` | Dict → 对象 |
+| `user_request` | `Optional[_MinimalUserRequest]` | `session_id` | `str` | 移除 user_request，user 消息在 history 中；session_id 从首个 UserRequest 提取 |
+| `history` | `List[Dict[str, Any]]` | `history` | `List[Message]` | Dict → 对象；现包含完整事件流 |
+| `tool_calls` | `List[Dict[str, Any]]` | `tool_calls` | `List[ToolCallRecord]` | Dict → 对象；tool_call_id 与 history 中 ToolCall 对齐 |
 | `final_output` | `str` | `final_output` | `str` | 取值方式从 `dict.get("content")` → `.content` |
 | `execution_time` | `float` | `execution_time` | `float` | 直接映射 |
 | `system_state` | `Dict[str, Any]` | `system_state` | `SystemState` | Dict 访问 → 属性访问 |

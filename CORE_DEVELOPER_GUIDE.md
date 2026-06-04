@@ -463,6 +463,7 @@ class ToolCall:
 ```python
 @dataclass
 class ToolCallRecord:
+    tool_call_id: str = ""                  # 关联的 ToolCall.id，用于与 history 对齐
     tool_name: str = ""                     # 工具名称
     arguments: Dict[str, Any] = {}          # 调用参数
     result: Any = None                      # 执行结果
@@ -516,6 +517,7 @@ class Message:
     role: str = "user"                      # "system" | "user" | "assistant" | "tool"
     content: str = ""                       # 消息文本内容
     tool_call_id: Optional[str] = None      # 当 role="tool" 时关联的 tool_use 标识
+    tool_calls: Optional[List[ToolCall]] = None  # 当 role="assistant" 时携带的并行工具调用列表
 ```
 
 ### 5.9 MemoryItem
@@ -568,9 +570,9 @@ Sensor.sense() 的输入端。
 ```python
 @dataclass
 class Trajectory:
-    user_request: Optional[UserRequest] = None
-    history: List[Message] = []             # 完整对话历史
-    tool_calls: List[ToolCallRecord] = []   # 工具调用执行记录
+    session_id: str = ""                    # 会话标识
+    history: List[Message] = []             # 完整事件流: user → assistant(+tool_calls) → tool_result → ...
+    tool_calls: List[ToolCallRecord] = []   # 工具调用执行记录（通过 tool_call_id 关联 history 中的 ToolCall）
     final_output: str = ""                  # Agent 最终输出
     execution_time: float = 0.0             # 执行耗时（秒）
     system_state: SystemState = SystemState()
@@ -587,7 +589,7 @@ ContextAssembler.assemble() 消费 ← AssemblyContext
 call_llm 产出                     → Response（含 ToolCall[]）
   ToolRouter.execute() 记录       → ToolCallRecord
 Sensor.sense() 消费              ← Trajectory
-  (内含: UserRequest, Message[], ToolCallRecord[], SystemState)
+  (内含: Message[], ToolCallRecord[], SystemState, session_id)
 ```
 
 ---

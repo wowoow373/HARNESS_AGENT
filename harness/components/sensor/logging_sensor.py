@@ -126,7 +126,7 @@ class LoggingSensor:
         """Extract session_id from trajectory.
 
         Priority:
-            1. ``trajectory.user_request.session_id``
+            1. ``trajectory.session_id``
             2. Fallback ``"unknown"``
 
         Args:
@@ -135,11 +135,8 @@ class LoggingSensor:
         Returns:
             Non-empty session identifier string.
         """
-        if (
-            trajectory.user_request is not None
-            and trajectory.user_request.session_id
-        ):
-            return trajectory.user_request.session_id
+        if trajectory.session_id:
+            return trajectory.session_id
         return _FALLBACK_SESSION_ID
 
     def _build_value(
@@ -158,7 +155,11 @@ class LoggingSensor:
         Returns:
             Structured dictionary with all tracked fields.
         """
-        user_request_text = trajectory.user_request.text if trajectory.user_request else ""
+        user_request_text = ""
+        for msg in trajectory.history:
+            if msg.role == "user":
+                user_request_text = msg.content
+                break
 
         tool_calls_summary = self._build_tool_calls_summary(trajectory)
         history_excerpt = self._build_history_excerpt(trajectory)

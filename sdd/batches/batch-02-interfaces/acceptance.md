@@ -36,8 +36,8 @@
 - [ ] A2.1.5 `GuidesBundle` — 5 字段（identity, capabilities, rules, constraints, examples）
 - [ ] A2.1.6 `Example` — 2 字段（input, output）
 - [ ] A2.1.7 `AssemblyContext` — 7 字段（user_request, guides, available_tools, history, memories, system_state, metadata）
-- [ ] A2.1.8 `Trajectory` — 7 字段（user_request, history, tool_calls, final_output, execution_time, system_state, metadata）
-- [ ] A2.1.9 `Message` — 3 字段（role, content, tool_call_id）
+- [ ] A2.1.8 `Trajectory` — 7 字段（session_id, history, tool_calls, final_output, execution_time, system_state, metadata）
+- [ ] A2.1.9 `Message` — 4 字段（role, content, tool_call_id, tool_calls）
 - [ ] A2.1.10 `Response` — 4 字段（text, thinking, tool_uses, stop_reason）
 - [ ] A2.1.11 `ToolCall` — 3 字段（id, type, function）
 - [ ] A2.1.12 `ToolCallFunction` — 2 字段（name, arguments）

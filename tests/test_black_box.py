@@ -727,7 +727,7 @@ class TestDataStructures:
     def test_trajectory_fields(self):
         from harness.interfaces.types import Trajectory
         traj = Trajectory()
-        assert traj.user_request is None
+        assert traj.session_id == ""
         assert isinstance(traj.history, list)
         assert isinstance(traj.tool_calls, list)
         assert traj.final_output == ""

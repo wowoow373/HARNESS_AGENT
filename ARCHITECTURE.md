@@ -179,9 +179,9 @@ sense(trajectory: Trajectory) → void
 ```
 
 **输入大包对象 Trajectory**：
-- user_request：用户原始请求
-- history：完整对话历史（含思考过程、工具调用）
-- tool_calls：所有工具调用记录与执行结果
+- session_id：会话标识
+- history：完整事件流（user → assistant(+tool_calls) → tool_result → assistant(text) → ...）
+- tool_calls：所有工具调用记录与执行结果（通过 tool_call_id 与 history 中的 ToolCall 对齐）
 - final_output：Agent 最终输出
 - execution_time：执行耗时
 - system_state：系统当前状态（会话阶段、运行模式、资源状态等）

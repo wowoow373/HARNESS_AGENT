@@ -444,7 +444,10 @@ class TestPhaseLoop:
         adapter = container.resolve(InputAdapter)
         assert len(adapter.outputs) == 1
         assert "Hello" in adapter.outputs[0]
-        assert len(orch._history) == 1
+        # history 现在按事件流顺序: user → assistant
+        assert len(orch._history) == 2
+        assert orch._history[0].role == "user"
+        assert orch._history[1].role == "assistant"
 
     def test_multi_turn_conversation(self):
         """多轮对话（2 轮 + 退出）。"""
@@ -469,9 +472,117 @@ class TestPhaseLoop:
 
         adapter = container.resolve(InputAdapter)
         assert len(adapter.outputs) == 2
-        assert len(orch._history) == 2
-        assert orch._history[0].content == "Reply to: hello"
-        assert orch._history[1].content == "Reply to: what's up"
+        # history 现在是: user → assistant → user → assistant
+        assert len(orch._history) == 4
+        assert orch._history[0].role == "user"
+        assert orch._history[0].content == "hello"
+        assert orch._history[1].role == "assistant"
+        assert orch._history[1].content == "Reply to: hello"
+        assert orch._history[2].role == "user"
+        assert orch._history[2].content == "what's up"
+        assert orch._history[3].role == "assistant"
+        assert orch._history[3].content == "Reply to: what's up"
+
+    def test_history_integrity_user_assistant_alternation(self):
+        """验证 history 中 user/assistant 按事件流正确交替记录。
+
+        history 顺序: user(轮1) -> assistant(轮1) -> user(轮2) -> assistant(轮2) -> ...
+        （不含 tool_use/tool_result 时）
+        """
+        container = self._setup_container_with_adapter(
+            inputs=["first", "second", "third", ""]
+        )
+
+        call_count = [0]
+
+        def counting_llm(msgs, tools):
+            call_count[0] += 1
+            return Response(
+                text=f"reply_{call_count[0]}", stop_reason="end_turn"
+            )
+
+        orch = LifecycleOrchestrator(container, call_llm=counting_llm)
+        orch._cached_guides = GuidesBundle(identity="test")
+        orch._cached_tools = []
+
+        ctx = orch._phase_init()
+        orch._phase_loop(ctx)
+
+        # 3 轮完整对话
+        assert len(orch._history) == 6
+        expected_roles = ["user", "assistant", "user", "assistant", "user", "assistant"]
+        actual_roles = [m.role for m in orch._history]
+        assert actual_roles == expected_roles, f"Expected {expected_roles}, got {actual_roles}"
+        assert orch._history[0].content == "first"
+        assert orch._history[2].content == "second"
+        assert orch._history[4].content == "third"
+
+    def test_history_includes_tool_interactions(self):
+        """验证 tool_use + tool_result 被记录到 history 中。"""
+        container = self._setup_container_with_adapter()
+
+        class MockToolProvider:
+            def get_tools(self):
+                return [
+                    ToolDefinition(
+                        name="echo",
+                        description="Echo back input",
+                        parameters={},
+                    )
+                ]
+
+            def execute(self, name, args):
+                class TR:
+                    success = True
+                    content = f"echoed: {args.get('msg', '')}"
+                    error = None
+                return TR()
+
+        container.register(SystemToolProvider, MockToolProvider())
+
+        call_count = [0]
+
+        def tool_then_text_llm(msgs, tools):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return Response(
+                    tool_uses=[
+                        ToolCall(
+                            id="hist_test_c1",
+                            function=ToolCallFunction(
+                                name="echo",
+                                arguments='{"msg":"test123"}',
+                            ),
+                        )
+                    ],
+                    stop_reason="tool_use",
+                )
+            else:
+                return Response(text="done", stop_reason="end_turn")
+
+        orch = LifecycleOrchestrator(container, call_llm=tool_then_text_llm)
+        orch._cached_guides = GuidesBundle(identity="test")
+        orch._cached_tools = []
+
+        ctx = orch._phase_init()
+        orch._phase_loop(ctx)
+
+        # history: user → assistant(tool_calls) → tool(result) → assistant(text)
+        assert len(orch._history) == 4
+        # 1st: user
+        assert orch._history[0].role == "user"
+        # 2nd: assistant with tool_calls
+        assert orch._history[1].role == "assistant"
+        assert orch._history[1].tool_calls is not None
+        assert len(orch._history[1].tool_calls) == 1
+        assert orch._history[1].tool_calls[0].function.name == "echo"
+        # 3rd: tool result
+        assert orch._history[2].role == "tool"
+        assert orch._history[2].tool_call_id == "hist_test_c1"
+        assert "echoed: test123" in orch._history[2].content
+        # 4th: assistant text
+        assert orch._history[3].role == "assistant"
+        assert orch._history[3].content == "done"
 
     def test_tool_use_loop(self):
         """tool_use 循环（纯 tool_use → tool result → LLM again → text）。"""
@@ -531,7 +642,13 @@ class TestPhaseLoop:
         assert call_count[0] == 2
         assert len(orch._tool_call_records) == 1
         assert orch._tool_call_records[0].tool_name == "read"
-        assert orch._history[-1].content == "File contents: hello world"
+        assert orch._tool_call_records[0].tool_call_id == "c1"
+        # history 现在是: user → assistant(tool_calls) → tool(result) → assistant(text)
+        user_msgs = [m for m in orch._history if m.role == "user"]
+        assert len(user_msgs) == 1
+        user_msgs = [m for m in orch._history if m.role == "assistant" and m.content]
+        assert len(user_msgs) == 1
+        assert user_msgs[0].content == "File contents: hello world"
 
     def test_text_and_tool_uses_coexistence(self):
         """text + tool_uses 共存场景。"""

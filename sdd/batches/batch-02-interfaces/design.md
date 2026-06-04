@@ -133,13 +133,13 @@ from .guide_provider import GuideProvider
 | 5 | `GuidesBundle` | identity: str, capabilities: List[str], rules: List[str], constraints: List[str], examples: List[Example] | 5 |
 | 6 | `Example` | input: str, output: str | 2 |
 | 7 | `AssemblyContext` | user_request: UserRequest, guides: GuidesBundle, available_tools: List[ToolDefinition], history: List[Message], memories: List[MemoryItem], system_state: SystemState, metadata: Dict[str, Any] | 7 |
-| 8 | `Trajectory` | user_request: UserRequest, history: List[Message], tool_calls: List[ToolCallRecord], final_output: str, execution_time: float, system_state: SystemState, metadata: Dict[str, Any] | 7 |
-| 9 | `Message` | role: str, content: str, tool_call_id: Optional[str] | 3 |
+| 8 | `Trajectory` | session_id: str, history: List[Message], tool_calls: List[ToolCallRecord], final_output: str, execution_time: float, system_state: SystemState, metadata: Dict[str, Any] | 7 |
+| 9 | `Message` | role: str, content: str, tool_call_id: Optional[str], tool_calls: Optional[List[ToolCall]] | 4 |
 | 10 | `Response` | text: Optional[str], thinking: Optional[str], tool_uses: List[ToolCall], stop_reason: str | 4 |
 | 11 | `ToolCall` | id: str, type: str, function: ToolCallFunction | 3 |
 | 12 | `ToolCallFunction` | name: str, arguments: str | 2 |
 | 13 | `ToolDefinition` | name: str, description: str, parameters: Dict[str, Any] | 3 |
-| 14 | `ToolCallRecord` | tool_name: str, arguments: Dict[str, Any], result: Any, started_at: float, finished_at: float, error: Optional[str] | 6 |
+| 14 | `ToolCallRecord` | tool_call_id: str, tool_name: str, arguments: Dict[str, Any], result: Any, started_at: float, finished_at: float, error: Optional[str] | 7 |
 | 15 | `ToolResult` | success: bool, content: Any, error: Optional[str] | 3 |
 | 16 | `MemoryItem` | key: str, value: Any, namespace: str, timestamp: float, metadata: Dict[str, Any] | 5 |
 
@@ -156,7 +156,6 @@ from .guide_provider import GuideProvider
 >
 > 实际实现代码（[tasks.md](tasks.md) 阶段 1）中使用了 **"鲁棒 dataclass"形式**（如 `user_request: Optional[UserRequest] = None`），加了 `Optional` 以允许 `None` 默认值。这两种形式影响到的字段包括：
 > - `AssemblyContext.user_request`, `AssemblyContext.guides`
-> - `Trajectory.user_request`
 > - `GuideContext.user_request`, `GuideContext.env_state`
 >
 > **实现者应遵循 tasks.md 的鲁棒形式** — 非 Optional 字段在 dataclass 中使用 `None` 默认值会导致类型检查器报错。

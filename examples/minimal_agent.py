@@ -11,12 +11,6 @@
   - LoggingSensor     : 会话轨迹写入 episodic 记忆
   - MinimalLLMAdapter : 真实 LLM API 调用（OpenAI 兼容，自动读取 .env 配置）
 
-.. note::
-
-   batch-10（di-assembly）尚未实现，因此当前通过 ``build_agent()`` 手动装配 DI 容器。
-   batch-10 完成后将提供 ``Harness.from_profile()`` 等更便捷的入口，
-   但手动装配方式将始终保留 — 这正是框架"显式装配"的核心设计。
-
 用法::
 
     cd /path/to/harness_agent
@@ -49,7 +43,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List
 
 # ---------------------------------------------------------------------------
 # 将项目根目录加入 sys.path（使得 examples/ 可以在任意位置运行）
@@ -91,102 +84,10 @@ logger = logging.getLogger("minimal_agent")
 
 
 # ---------------------------------------------------------------------------
-# 装配函数 — batch-10（di-assembly）之前的显式装配方式
-# ---------------------------------------------------------------------------
-def build_agent(
-    memory_path: str = "./memory",
-    guide_paths: List[str] | None = None,
-    llm_model: str | None = None,
-) -> Harness:
-    """装配并返回一个完整的 Agent 实例。
-
-    通过 DI 容器显式注册所有组件的默认实现。
-    这是框架的核心使用方式：用户创建组件实例 → 注册到容器 → 启动。
-
-    用户可按需替换任意组件：
-      - 换用 MemoryBackend: ``container.register(MemoryBackend, RedisMemory(...))``
-      - 换用 InputAdapter: ``container.register(InputAdapter, WebAdapter(...))``
-      - 换用 LLM:         ``MinimalLLMAdapter(model="claude-opus-4-8")``
-      - 裁切 MCP:         不注册 MCPAdapter 即可
-
-    .. note::
-
-       batch-10 完成后可简化为 ``Harness.from_profile(...)``，
-       但 ``build_agent()`` 这种显式装配方式将始终可用。
-
-    Args:
-        memory_path: 记忆存储目录路径。
-        guide_paths: AGENTS.md 等指导文件路径列表。
-                     为 None 时自动检测当前目录和项目根目录。
-        llm_model: LLM 模型名称，为 None 时使用 .env 中的默认值。
-
-    Returns:
-        Harness: 可运行的框架实例（调用 ``harness.run()`` 启动）。
-    """
-    container = DIContainer()
-
-    # --- MemoryBackend ---
-    memory = MdMemory(path=memory_path)
-    container.register(MemoryBackend, memory)
-    logger.info("MemoryBackend: %s → %s", type(memory).__name__, memory_path)
-
-    # --- InputAdapter ---
-    adapter = CliAdapter()
-    adapter.prompt = "> "
-    container.register(InputAdapter, adapter)
-    logger.info("InputAdapter: %s", type(adapter).__name__)
-
-    # --- GuideProvider ---
-    if guide_paths is None:
-        guide_paths = []
-        for candidate in ["AGENTS.md", "CLAUDE.md"]:
-            if os.path.exists(candidate):
-                guide_paths.append(candidate)
-        example_guide = os.path.join(os.path.dirname(__file__), "AGENTS.md")
-        if os.path.exists(example_guide):
-            guide_paths.append(example_guide)
-
-    if guide_paths:
-        guide = FileGuideProvider(guide_paths)
-        container.register(GuideProvider, guide)
-        logger.info("GuideProvider: %s → %s", type(guide).__name__, guide_paths)
-    else:
-        logger.info("GuideProvider: (未注册 — 无 AGENTS.md 文件)")
-
-    # --- ContextAssembler ---
-    assembler = SimpleAssembler(max_history=50, memory=memory)
-    container.register(ContextAssembler, assembler)
-    logger.info("ContextAssembler: %s (max_history=50)", type(assembler).__name__)
-
-    # --- Sensor ---
-    sensor = LoggingSensor(memory=memory)
-    container.register(Sensor, sensor)
-    logger.info("Sensor: %s", type(sensor).__name__)
-
-    # --- LLM Adapter（真实 API）---
-    llm_kwargs = {}
-    if llm_model:
-        llm_kwargs["model"] = llm_model
-    llm = MinimalLLMAdapter(**llm_kwargs)
-    logger.info(
-        "LLM: %s (model=%s, base_url=%s)",
-        type(llm).__name__,
-        llm.model,
-        llm.base_url,
-    )
-
-    # --- 装配 Harness ---
-    harness = Harness.from_container(container, call_llm=llm)
-    logger.info("Harness: 装配完成，所有组件已就绪")
-
-    return harness
-
-
-# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 def main():
-    """启动多轮对话 Agent。"""
+    """启动多轮对话 Agent — DI 容器显式装配。"""
     print("=" * 50)
     print("  Harness Agent Template — 多轮对话示例")
     print("=" * 50)
@@ -202,7 +103,44 @@ def main():
     print("输入 /exit 或 Ctrl+D 退出")
     print()
 
-    harness = build_agent(memory_path="./memory")
+    # ── DI 容器：显式注册所有组件 ──────────────────────────────────────────
+    container = DIContainer()
+
+    # MemoryBackend — 跨会话持久化
+    memory = MdMemory(path="./memory")
+    container.register(MemoryBackend, memory)
+
+    # InputAdapter — stdin/stdout 交互
+    adapter = CliAdapter()
+    adapter.prompt = "> "
+    container.register(InputAdapter, adapter)
+
+    # GuideProvider — 加载 AGENTS.md / CLAUDE.md 指导文件
+    guide_paths = []
+    for candidate in ["AGENTS.md", "CLAUDE.md"]:
+        if os.path.exists(candidate):
+            guide_paths.append(candidate)
+    example_guide = os.path.join(os.path.dirname(__file__), "AGENTS.md")
+    if os.path.exists(example_guide):
+        guide_paths.append(example_guide)
+
+    if guide_paths:
+        container.register(GuideProvider, FileGuideProvider(guide_paths))
+    # 无指导文件时跳过 — GuideProvider 是可选的
+
+    # ContextAssembler — 滑动窗口上下文拼接（max_history=50，可注入 memory 做增强检索）
+    container.register(ContextAssembler, SimpleAssembler(max_history=50, memory=memory))
+
+    # Sensor — 会话结束后将轨迹写入 episodic 记忆
+    container.register(Sensor, LoggingSensor(memory=memory))
+
+    # LLM 适配器 — 自动从 .env / 环境变量读取配置
+    # 切模型: MinimalLLMAdapter(model="claude-opus-4-8")
+    # 自定义 endpoint: MinimalLLMAdapter(base_url="http://localhost:11434/v1", api_key="ollama")
+    llm = MinimalLLMAdapter()
+
+    # ── 装配并启动 ──────────────────────────────────────────────────────────
+    harness = Harness.from_container(container, call_llm=llm)
 
     try:
         harness.run()

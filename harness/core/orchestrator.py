@@ -91,6 +91,7 @@ class LifecycleOrchestrator:
         self.call_llm = call_llm
 
         # 会话状态
+        self._session_id: str = ""
         self._history: List[Message] = []
         self._tool_call_records: List[ToolCallRecord] = []
         self._start_time: float = 0.0
@@ -155,6 +156,7 @@ class LifecycleOrchestrator:
         # 1. InputAdapter（必需组件）
         adapter = self.container.resolve(InputAdapter)
         user_request = adapter.receive()
+        self._session_id = user_request.session_id
         logger.debug(f"Received user request: {user_request.text}")
 
         # 检查退出信号 — 用户在第一轮就发出退出指令时直接跳到阶段三
@@ -268,6 +270,13 @@ class LifecycleOrchestrator:
 
         # 外层循环 — 每轮用户输入触发一次
         while not self._should_exit_flag:
+            # === 将当前轮用户请求写入 history ===
+            if ctx.user_request and ctx.user_request.text:
+                self._history.append(Message(
+                    role="user",
+                    content=ctx.user_request.text,
+                ))
+
             # === 外层：组装上下文 ===
             if assembler:
                 try:
@@ -304,9 +313,16 @@ class LifecycleOrchestrator:
 
                 # --- 处理 tool_uses ---
                 if response.tool_uses:
-                    # 构造含 tool_calls 的 assistant message 并追加
+                    # 构造含 tool_calls 的 assistant message 并追加到 messages
                     assistant_msg = build_assistant_message(response)
                     messages.append(assistant_msg)
+
+                    # 将 assistant tool_use 消息写入 history
+                    self._history.append(Message(
+                        role="assistant",
+                        content=response.text or "",
+                        tool_calls=list(response.tool_uses),
+                    ))
 
                     # 串行执行每个 tool
                     for tc in response.tool_uses:
@@ -347,6 +363,7 @@ class LifecycleOrchestrator:
 
                         # 记录到 tool_call_records（使用正式类型 ToolCallRecord）
                         self._tool_call_records.append(ToolCallRecord(
+                            tool_call_id=tc.id,
                             tool_name=tc.function.name,
                             arguments=args,
                             result=content if success else None,
@@ -359,12 +376,17 @@ class LifecycleOrchestrator:
                         tool_msg = build_tool_result_message(tc, content, error)
                         messages.append(tool_msg)
 
+                        # 将 tool 执行结果写入 history
+                        self._history.append(Message(
+                            role="tool",
+                            content=str(content) if not error else f"Error: {error}",
+                            tool_call_id=tc.id,
+                        ))
+
                     # 如果本次 response 有 text → 发给用户 + 跳出内层循环
+                    # （assistant tool_use 消息已在上方统一写入 history）
                     if response.text:
                         adapter.send(response)
-                        self._history.append(
-                            Message(role="assistant", content=response.text or "")
-                        )
                         break
 
                     # 仅有 tool_uses 无 text → 继续内层循环（回到 LLM）
@@ -504,6 +526,7 @@ class LifecycleOrchestrator:
             final_output = last.content if last else ""
 
         return Trajectory(
+            session_id=self._session_id,
             history=list(self._history),
             tool_calls=list(self._tool_call_records),
             final_output=final_output,

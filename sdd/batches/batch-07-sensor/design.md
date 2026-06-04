@@ -61,7 +61,7 @@ class Sensor(Protocol):
 ```python
 @dataclass
 class Trajectory:
-    user_request: Optional[UserRequest] = None
+    session_id: str = ""
     history: List[Message] = field(default_factory=list)
     tool_calls: List[ToolCallRecord] = field(default_factory=list)
     final_output: str = ""
@@ -122,7 +122,7 @@ class LoggingSensor:
 {
     "session_id": str,
     "timestamp": float,
-    "user_request": str,           # 用户原始请求文本
+    "user_request": str,           # 用户原始请求文本（从 trajectory.history 的首个 role="user" 消息提取）
     "final_output": str,           # Agent 最终输出
     "execution_time": float,       # 执行耗时（秒）
     "message_count": int,          # 对话消息数量

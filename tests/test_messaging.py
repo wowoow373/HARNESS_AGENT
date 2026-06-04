@@ -63,6 +63,36 @@ class TestMessageToDict:
         assert "tool_call_id" not in result
         assert set(result.keys()) == {"role", "content"}
 
+    def test_with_tool_calls(self):
+        """message_to_dict — tool_calls 非 None 时正确序列化。"""
+        m = Message(
+            role="assistant",
+            content="Let me check",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    type="function",
+                    function=ToolCallFunction(
+                        name="read",
+                        arguments='{"path":"/x"}',
+                    ),
+                )
+            ],
+        )
+        result = message_to_dict(m)
+        assert result["role"] == "assistant"
+        assert result["content"] == "Let me check"
+        assert "tool_calls" in result
+        assert len(result["tool_calls"]) == 1
+        assert result["tool_calls"][0]["id"] == "c1"
+        assert result["tool_calls"][0]["function"]["name"] == "read"
+
+    def test_tool_calls_none_not_serialized(self):
+        """message_to_dict — tool_calls 为 None 时输出不含该字段。"""
+        m = Message(role="assistant", content="hi", tool_calls=None)
+        result = message_to_dict(m)
+        assert "tool_calls" not in result
+
 
 # ---------------------------------------------------------------------------
 # dict_to_message tests
@@ -96,15 +126,33 @@ class TestDictToMessage:
         m = dict_to_message({"role": "assistant"})
         assert m.content == ""
 
-    def test_ignores_extra_fields(self):
-        """dict_to_message — 忽略 tool_calls 等非标字段（不抛异常）。"""
+    def test_parses_tool_calls_field(self):
+        """dict_to_message — tool_calls 字段被正确解析为 ToolCall 列表。"""
         m = dict_to_message({
             "role": "assistant",
-            "content": "hi",
-            "tool_calls": [{"id": "c1"}],
+            "content": "Let me check",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"path": "/x"}',
+                    },
+                }
+            ],
         })
         assert m.role == "assistant"
-        assert m.content == "hi"
+        assert m.content == "Let me check"
+        assert m.tool_calls is not None
+        assert len(m.tool_calls) == 1
+        assert m.tool_calls[0].id == "c1"
+        assert m.tool_calls[0].function.name == "read"
+
+    def test_tool_calls_none_when_absent(self):
+        """dict_to_message — 无 tool_calls 时 tool_calls 为 None。"""
+        m = dict_to_message({"role": "assistant", "content": "hi"})
+        assert m.tool_calls is None
 
     def test_missing_role_defaults_to_user(self):
         """dict_to_message — 缺失 role 时默认 "user"。"""
@@ -135,6 +183,41 @@ class TestRoundtrip:
         assert restored.role == original.role
         assert restored.content == original.content
         assert restored.tool_call_id == original.tool_call_id
+
+    def test_roundtrip_with_tool_calls(self):
+        """message_to_dict ↔ dict_to_message — tool_calls 往返一致性。"""
+        original = Message(
+            role="assistant",
+            content="Let me check",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    type="function",
+                    function=ToolCallFunction(
+                        name="read",
+                        arguments='{"path":"/x"}',
+                    ),
+                ),
+                ToolCall(
+                    id="c2",
+                    type="function",
+                    function=ToolCallFunction(
+                        name="write",
+                        arguments='{"path":"/y","content":"data"}',
+                    ),
+                ),
+            ],
+        )
+        dict_form = message_to_dict(original)
+        restored = dict_to_message(dict_form)
+        assert restored.role == original.role
+        assert restored.content == original.content
+        assert restored.tool_calls is not None
+        assert len(restored.tool_calls) == 2
+        assert restored.tool_calls[0].id == "c1"
+        assert restored.tool_calls[0].function.name == "read"
+        assert restored.tool_calls[1].id == "c2"
+        assert restored.tool_calls[1].function.name == "write"
 
 
 # ---------------------------------------------------------------------------

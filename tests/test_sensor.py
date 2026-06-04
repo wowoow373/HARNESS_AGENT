@@ -18,7 +18,6 @@ from harness.interfaces.types import (
     SystemState,
     ToolCallRecord,
     Trajectory,
-    UserRequest,
 )
 
 
@@ -37,10 +36,7 @@ def mock_memory() -> MagicMock:
 def populated_trajectory() -> Trajectory:
     """Trajectory with all fields populated."""
     return Trajectory(
-        user_request=UserRequest(
-            text="Write a hello world Python script",
-            session_id="sess-001",
-        ),
+        session_id="sess-001",
         history=[
             Message(role="user", content="Write a hello world Python script"),
             Message(role="assistant", content="Here is a hello world script:"),
@@ -219,11 +215,13 @@ class TestSenseBehavior:
         sensor = LoggingSensor(memory=mock_memory)
 
         traj_a = Trajectory(
-            user_request=UserRequest(text="task A", session_id="sess-A"),
+            session_id="sess-A",
+            history=[Message(role="user", content="task A")],
             execution_time=1.0,
         )
         traj_b = Trajectory(
-            user_request=UserRequest(text="task B", session_id="sess-B"),
+            session_id="sess-B",
+            history=[Message(role="user", content="task B")],
             execution_time=2.0,
         )
 

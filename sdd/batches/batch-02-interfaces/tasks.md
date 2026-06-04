@@ -75,8 +75,8 @@
   - 默认值：`user_request = None`, `guides = None`, `available_tools = field(default_factory=list)`, `history = field(default_factory=list)`, `memories = field(default_factory=list)`, `system_state = field(default_factory=SystemState)`, `metadata = field(default_factory=dict)`
 
 - [ ] 1.2.7 创建 `Trajectory` dataclass
-  - 字段：`user_request: Optional[UserRequest]`, `history: List[Message]`, `tool_calls: List[ToolCallRecord]`, `final_output: str`, `execution_time: float`, `system_state: SystemState`, `metadata: Dict[str, Any]`
-  - 默认值：`user_request = None`, `history = field(default_factory=list)`, `tool_calls = field(default_factory=list)`, `final_output = ""`, `execution_time = 0.0`, `system_state = field(default_factory=SystemState)`, `metadata = field(default_factory=dict)`
+  - 字段：`session_id: str`, `history: List[Message]`, `tool_calls: List[ToolCallRecord]`, `final_output: str`, `execution_time: float`, `system_state: SystemState`, `metadata: Dict[str, Any]`
+  - 默认值：`session_id = ""`, `history = field(default_factory=list)`, `tool_calls = field(default_factory=list)`, `final_output = ""`, `execution_time = 0.0`, `system_state = field(default_factory=SystemState)`, `metadata = field(default_factory=dict)`
 
 ### 1.3 文件收尾
 

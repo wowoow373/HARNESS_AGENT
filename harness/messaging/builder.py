@@ -6,7 +6,7 @@
 
 from typing import Any, Dict, List
 
-from ..interfaces.types import Message, Response, ToolCall, ToolDefinition
+from ..interfaces.types import Message, Response, ToolCall, ToolCallFunction, ToolDefinition
 
 
 # ---------------------------------------------------------------------------
@@ -26,6 +26,18 @@ def message_to_dict(msg: Message) -> Dict[str, Any]:
     result: Dict[str, Any] = {"role": msg.role, "content": msg.content}
     if msg.tool_call_id is not None:
         result["tool_call_id"] = msg.tool_call_id
+    if msg.tool_calls is not None:
+        result["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": tc.type,
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            for tc in msg.tool_calls
+        ]
     return result
 
 
@@ -52,6 +64,7 @@ def messages_to_dicts(messages: List[Any]) -> List[Dict[str, Any]]:
                 role=getattr(m, "role", "user"),
                 content=getattr(m, "content", ""),
                 tool_call_id=getattr(m, "tool_call_id", None),
+                tool_calls=getattr(m, "tool_calls", None),
             )))
     return result
 
@@ -59,9 +72,8 @@ def messages_to_dicts(messages: List[Any]) -> List[Dict[str, Any]]:
 def dict_to_message(d: Dict[str, Any]) -> Message:
     """将 OpenAI 兼容 dict 转为 Message 对象。
 
-    从 dict 提取 role、content、tool_call_id。
+    从 dict 提取 role、content、tool_call_id、tool_calls。
     content 为 None 或缺失时默认 ""。
-    忽略 tool_calls 等 Message 不包含的字段。
 
     Args:
         d: OpenAI 兼容的 message dict。
@@ -69,10 +81,25 @@ def dict_to_message(d: Dict[str, Any]) -> Message:
     Returns:
         Message 对象。
     """
+    tool_calls_raw = d.get("tool_calls")
+    tool_calls = None
+    if tool_calls_raw:
+        tool_calls = [
+            ToolCall(
+                id=tc.get("id", ""),
+                type=tc.get("type", "function"),
+                function=ToolCallFunction(
+                    name=tc.get("function", {}).get("name", ""),
+                    arguments=tc.get("function", {}).get("arguments", "{}"),
+                ),
+            )
+            for tc in tool_calls_raw
+        ]
     return Message(
         role=d.get("role", "user"),
         content=d.get("content") or "",
         tool_call_id=d.get("tool_call_id"),
+        tool_calls=tool_calls,
     )
 
 

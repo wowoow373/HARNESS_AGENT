@@ -339,9 +339,11 @@ class TestExitSignals:
         )
 
         trajectory = spy.calls[0]
-        # History should contain the assistant reply from the normal turn
+        # History 现在是: user → assistant（按事件流顺序）
         assert len(trajectory.history) >= 1, (
             "Expected at least 1 history entry from the normal turn"
         )
-        assert trajectory.history[0].role == "assistant"
-        assert "normal reply" in trajectory.history[0].content
+        # Find the assistant message in history
+        assistant_msgs = [m for m in trajectory.history if m.role == "assistant"]
+        assert len(assistant_msgs) >= 1, "Expected at least one assistant message"
+        assert "normal reply" in assistant_msgs[0].content

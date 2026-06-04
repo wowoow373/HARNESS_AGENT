@@ -277,7 +277,7 @@ class LifecycleOrchestrator:
         ...
 
     def _build_trajectory(self) -> Trajectory:
-        """从会话记录组装完整的 Trajectory 对象。"""
+        """从会话记录组装完整的 Trajectory 对象（含 session_id、完整事件流 history、tool_calls）。"""
         ...
 
     def _should_exit(self, user_request: UserRequest) -> bool:

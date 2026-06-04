@@ -171,6 +171,7 @@ class Message:
     role: str = "user"
     content: str = ""
     tool_call_id: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,7 @@ class ToolCallRecord:
         finished_at: 执行完成时间戳。
         error: 如果执行失败，记录错误信息。
     """
+    tool_call_id: str = ""
     tool_name: str = ""
     arguments: Dict[str, Any] = field(default_factory=dict)
     result: Any = None
@@ -293,15 +295,15 @@ class Trajectory:
     """会话结束后由框架组装，传入 Sensor.sense() 的完整执行轨迹。
 
     Attributes:
-        user_request: 用户原始请求。
-        history: 完整对话历史（含思考过程、工具调用）。
+        session_id: 会话标识。
+        history: 完整事件流（user → assistant(+tool_calls) → tool_result → assistant(text) → ...）。
         tool_calls: 所有工具调用记录与执行结果。
         final_output: Agent 最终输出。
         execution_time: 执行耗时（秒）。
         system_state: 系统当前状态。
         metadata: 扩展元数据。
     """
-    user_request: Optional[UserRequest] = None
+    session_id: str = ""
     history: List[Message] = field(default_factory=list)
     tool_calls: List[ToolCallRecord] = field(default_factory=list)
     final_output: str = ""
