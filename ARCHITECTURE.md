@@ -194,7 +194,7 @@ sense(trajectory: Trajectory) → void
 - 用户可在 Sensor 内部接入另一个 Agent 做复杂评估
 
 **实现示例**：
-- **LoggingSensor**：将轨迹记录到 MemoryBackend 的 `episodic` 命名空间，供后续检索
+- **LoggingSensor**（已实现：`harness/components/sensor/logging_sensor.py`）：将轨迹记录到 MemoryBackend 的 `episodic` 命名空间，供后续检索
 
 ---
 
@@ -286,7 +286,7 @@ send(response: Response) → void
 - metadata：领域扩展桶
 
 **实现示例**：
-- **CliAdapter**：从 stdin 读取输入，stdout 打印响应
+- **CliAdapter**（已实现：`harness/components/input_adapter/cli_adapter.py`）：从 stdin 读取输入，stdout 打印响应
 
 ---
 
@@ -473,6 +473,9 @@ input_adapter = CliAdapter()
 guide_provider = FileGuideProvider(rules_file="AGENTS.md")
 context_assembler = SimpleAssembler(memory=memory)
 sensor = LoggingSensor(memory=memory)
+# 注：CliAdapter 和 LoggingSensor 现已实现，分别位于
+# harness/components/input_adapter/cli_adapter.py 和
+# harness/components/sensor/logging_sensor.py
 
 # 3. 注册到容器
 container = DIContainer()

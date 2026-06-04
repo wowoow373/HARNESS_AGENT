@@ -13,7 +13,7 @@
 - **三阶段生命周期** — 会话初始化 → 多轮对话循环 → 会话结束，控制流清晰固定
 - **零依赖 LLM 适配器** — 内置 OpenAI 兼容 HTTP 客户端，自动从 `.env` / 环境变量读取配置
 - **Duck Typing 组件** — 不强制继承基类，有对应方法就能工作
-- **完整的类型与异常体系** — 17 个正式 dataclass + 9 个 Protocol + Hook 类型别名 + 完善的异常层次
+- **完整的类型与异常体系** — 17 个 dataclass 类型 + 10 个 Protocol/Hook 接口 + 完善的异常层次
 
 ---
 
@@ -40,7 +40,7 @@ export LLM_BASE_URL="https://api.openai.com/v1"
 ### 2. 运行最小示例
 
 ```bash
-python examples/hello_agent.py
+python examples/minimal_agent.py
 ```
 
 输入任意内容即可与 Agent 对话，输入 `/exit` 退出。
@@ -50,27 +50,23 @@ python examples/hello_agent.py
 ```python
 from harness.di import Harness
 from harness.core.container import DIContainer
-from harness.core.orchestrator import InputAdapter
-from harness.interfaces.types import UserRequest
+from harness.interfaces import InputAdapter, MemoryBackend, Sensor, ContextAssembler, GuideProvider
 from harness.adapters.llm_adapter import MinimalLLMAdapter
+from harness.components.input_adapter.cli_adapter import CliAdapter
+from harness.components.memory_backend.md_memory import MdMemory
+from harness.components.sensor.logging_sensor import LoggingSensor
+from harness.components.context_assembler.simple_assembler import SimpleAssembler
+from harness.components.guide_provider.file_guide_provider import FileGuideProvider
 
-# 1. 实现输入适配器
-class CliAdapter:
-    def receive(self):
-        text = input("> ")
-        return UserRequest(text=text)
-
-    def send(self, response):
-        print(f"\n🤖 {response.text}\n")
-
-# 2. 装配 DI 容器
 container = DIContainer()
+memory = MdMemory(path="./memory")
 container.register(InputAdapter, CliAdapter())
+container.register(MemoryBackend, memory)
+container.register(Sensor, LoggingSensor(memory=memory))
+container.register(ContextAssembler, SimpleAssembler(max_history=50))
+container.register(GuideProvider, FileGuideProvider("AGENTS.md"))
 
-# 3. 创建 LLM 适配器（零参数，自动读取 .env / 环境变量）
-llm = MinimalLLMAdapter()
-
-# 4. 启动
+llm = MinimalLLMAdapter()  # auto-reads .env
 Harness.from_container(container, call_llm=llm).run()
 ```
 
@@ -90,6 +86,7 @@ harness_agent/
 │   │   ├── exceptions.py             # 异常体系
 │   │   ├── config.py                 # 配置模型
 │   │   └── llm_adapter.py            # re-export 包装（指向 adapters/）
+│   │   ├── tool_router.py              # ToolRouter（框架内部，合并 Provider 路由）
 │   ├── interfaces/                   # 接口与类型定义（正式来源）
 │   │   ├── __init__.py               # 导出 17 类型 + 10 接口
 │   │   ├── types.py                  # 17 个正式 dataclass
@@ -126,6 +123,10 @@ harness_agent/
 │       └── mcp_manager/              # Batch-06
 │           ├── mcp_client.py         # MCPClient (JSON-RPC stdio)
 │           └── default_mcp_adapter.py # DefaultMCPAdapter
+│       ├── sensor/                      # Batch-07
+│       │   └── logging_sensor.py         # LoggingSensor — 轨迹写入 episodic 记忆
+│       └── input_adapter/                # Batch-08
+│           └── cli_adapter.py            # CliAdapter — stdin/stdout 交互
 ├── tests/                            # 测试套件
 │   ├── test_container.py             # DI 容器测试
 │   ├── test_config.py                # 配置加载器测试
@@ -136,10 +137,18 @@ harness_agent/
 │   ├── test_md_memory.py             # MdMemory 测试（Batch-03）
 │   ├── test_guide_provider.py        # FileGuideProvider 测试（Batch-04）
 │   ├── test_context_assembler.py     # SimpleAssembler 测试（Batch-05）
+│   ├── test_sensor.py                 # LoggingSensor 测试（Batch-07）
+│   ├── test_input_adapter.py         # CliAdapter 测试（Batch-08）
+│   ├── test_e2e_sensor_adapter.py    # Sensor + CliAdapter E2E 测试（Batch-07/08）
+│   ├── test_tool_router.py           # ToolRouter 测试（Batch-06）
+│   ├── test_system_tool_provider.py  # SystemToolProvider 测试（Batch-06）
+│   ├── test_mcp_adapter.py           # MCPAdapter 测试（Batch-06）
+│   ├── test_e2e_tool_flow.py         # Tool E2E 测试（Batch-06）
 │   ├── test_black_box.py             # 黑盒集成测试（含真实 API）
 │   └── test_real_llm_trace.py        # 真实 LLM 端到端 trace
 ├── examples/                         # 示例代码
-│   └── hello_agent.py                # 最小可运行 Agent
+│   ├── minimal_agent.py              # 最小多轮对话 Agent
+│   └── AGENTS.md                    # 示例指导文件
 ├── sdd/                              # 软件设计文档
 │   ├── 01-architecture.md            # 架构总览
 │   ├── 02-interfaces.md              # 接口设计
@@ -235,11 +244,11 @@ python tests/test_real_llm_trace.py
 - ✅ **Batch-04**：GuideProvider 默认实现（FileGuideProvider — Markdown 解析）
 - ✅ **Batch-05**：ContextAssembler 默认实现（SimpleAssembler — 滑动窗口 + 拼接）
 - ✅ **Batch-06**：Tool 与 MCP 体系（ToolRouter + SystemToolProvider + MCPAdapter + MCPHandler）
+- ✅ **Batch-07**：Sensor 默认实现（LoggingSensor — 轨迹持久化到 episodic 命名空间）
+- ✅ **Batch-08**：InputAdapter 默认实现（CliAdapter — stdin/stdout 命令行交互）
 
 即将实现：
 
-- ⏳ Batch-07：Sensor 默认实现
-- ⏳ Batch-08：InputAdapter 默认实现
 - ⏳ Batch-09：Hook 生命周期拦截
 - ⏳ Batch-10：完整 DI 装配方案
 

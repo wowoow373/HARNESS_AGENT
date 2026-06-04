@@ -73,6 +73,25 @@ harness/
 └── messaging/               # 消息格式转换
     ├── __init__.py           # 导出转换函数
     └── builder.py            # Message↔dict + ToolDefinition→OpenAI
+├── components/              # 组件默认实现
+│   ├── sensor/
+│   │   └── logging_sensor.py    # LoggingSensor（Batch-07）
+│   ├── input_adapter/
+│   │   └── cli_adapter.py       # CliAdapter（Batch-08）
+│   ├── context_assembler/
+│   │   └── simple_assembler.py  # SimpleAssembler（Batch-05）
+│   ├── guide_provider/
+│   │   └── file_guide_provider.py # FileGuideProvider（Batch-04）
+│   ├── memory_backend/
+│   │   └── md_memory.py         # MdMemory（Batch-03）
+│   ├── tool/
+│   │   ├── base.py              # BaseTool ABC
+│   │   ├── inline_tool.py       # @inline_tool 装饰器
+│   │   ├── system_tools.py      # ReadFileTool/WriteFileTool/ShellTool
+│   │   └── default_system_tool_provider.py
+│   └── mcp_manager/
+│       ├── mcp_client.py        # MCPClient（JSON-RPC stdio）
+│       └── default_mcp_adapter.py # DefaultMCPAdapter
 ```
 
 ---
@@ -82,25 +101,21 @@ harness/
 ```python
 from harness.di import Harness
 from harness.core.container import DIContainer
-from harness.interfaces import InputAdapter, UserRequest
+from harness.interfaces import InputAdapter, MemoryBackend, Sensor, ContextAssembler
 from harness.adapters.llm_adapter import MinimalLLMAdapter
+from harness.components.input_adapter.cli_adapter import CliAdapter
+from harness.components.memory_backend.md_memory import MdMemory
+from harness.components.sensor.logging_sensor import LoggingSensor
+from harness.components.context_assembler.simple_assembler import SimpleAssembler
 
-# 1. 创建容器 + 注册组件
 container = DIContainer()
-
-class CliAdapter:
-    def receive(self):
-        text = input("> ")
-        return UserRequest(text=text)
-    def send(self, response):
-        print(response.text)
-
+memory = MdMemory(path="./memory")
 container.register(InputAdapter, CliAdapter())
+container.register(MemoryBackend, memory)
+container.register(Sensor, LoggingSensor(memory=memory))
+container.register(ContextAssembler, SimpleAssembler(max_history=50))
 
-# 2. 创建 LLM 适配器（零参数 — 自动从 .env / 环境变量读取配置）
-llm = MinimalLLMAdapter()
-
-# 3. 启动
+llm = MinimalLLMAdapter()  # 零参数 — 自动从 .env / 环境变量读取
 harness = Harness.from_container(container, call_llm=llm)
 harness.run()
 ```
@@ -222,7 +237,7 @@ class MyAdapter:
 
 ```python
 class MyGuideProvider:
-    def get_guides(self, ctx: "AssemblyContext") -> "GuidesBundle":
+    def get_guides(self, ctx: "GuideContext") -> "GuidesBundle":
         """根据上下文返回指导信息。只调用一次，结果被缓存。"""
         ...
 ```
@@ -387,6 +402,8 @@ sensor = MySensor(memory=memory)
 container.register(MemoryBackend, memory)
 container.register(Sensor, sensor)
 ```
+
+默认实现见 `harness/components/sensor/logging_sensor.py` — 将轨迹全量写入 episodic 命名空间。
 
 ---
 
@@ -917,6 +934,8 @@ if your_comp:
 3. 在 `harness/interfaces/__init__.py` 中导出新接口。
 
 ### 11.4 实现 MemoryBackend 示例
+
+下面是 MdMemory 的完整实现示例。正式代码位于 `harness/components/memory_backend/md_memory.py`，此处展示完整源码以便理解其设计。
 
 ```python
 # harness/components/memory_backend/md_memory.py
