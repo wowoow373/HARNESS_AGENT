@@ -30,20 +30,20 @@ class HookContext:
 Hook = Callable[[HookContext], None]
 """Hook 函数类型。
 
-签名: (context: HookContext) -> None
+签名: ``(context: HookContext) -> None``
 
-Hook 通过修改 HookContext.data 实现拦截效果。
-Hook 点列表（事件名 → data 类型），共 11 个：
+Hook 通过修改 ``HookContext.data`` 实现拦截效果。
+事件常量定义见 ``harness.hooks.events`` 模块，共 11 个：
 
-- before_guide_generation → GuideContext
-- after_guide_generation → GuidesBundle
-- before_assemble → AssemblyContext
-- after_assemble → List[Message]
-- before_llm_call → List[Message]
-- after_llm_call → Response
-- before_tool_execute → ToolCall
-- after_tool_execute → ToolResult
-- after_sensor → Trajectory（只读观察）
-- on_session_end → Trajectory
-- on_error → Exception
+- ``EVENT_BEFORE_GUIDE_GENERATION`` → ``AssemblyContext``
+- ``EVENT_AFTER_GUIDE_GENERATION`` → ``GuidesBundle``
+- ``EVENT_BEFORE_ASSEMBLE`` → ``AssemblyContext``
+- ``EVENT_AFTER_ASSEMBLE`` → ``List[Message]``
+- ``EVENT_BEFORE_LLM_CALL`` → ``List[Message]``
+- ``EVENT_AFTER_LLM_CALL`` → ``Response``
+- ``EVENT_BEFORE_TOOL_EXECUTE`` → ``ToolCall``
+- ``EVENT_AFTER_TOOL_EXECUTE`` → ``ToolResult``
+- ``EVENT_AFTER_SENSOR`` → ``Trajectory``（只读观察）
+- ``EVENT_ON_SESSION_END`` → ``Trajectory``
+- ``EVENT_ON_ERROR`` → ``Exception``
 """

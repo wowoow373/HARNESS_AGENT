@@ -19,16 +19,33 @@ from typing import Any, Callable, Dict, List, Optional
 from .container import DIContainer
 from .exceptions import ComponentNotRegisteredError, OrchestratorError
 from .tool_router import ToolRouter
+from ..interfaces.hook import Hook
 from ..interfaces.types import (
     AssemblyContext,
     GuidesBundle,
     Message,
     Response,
+    SystemState,
     ToolCall,
     ToolCallRecord,
     ToolDefinition,
+    ToolResult,
     Trajectory,
     UserRequest,
+)
+from ..hooks import (
+    EVENT_AFTER_ASSEMBLE,
+    EVENT_AFTER_GUIDE_GENERATION,
+    EVENT_AFTER_LLM_CALL,
+    EVENT_AFTER_SENSOR,
+    EVENT_AFTER_TOOL_EXECUTE,
+    EVENT_BEFORE_ASSEMBLE,
+    EVENT_BEFORE_GUIDE_GENERATION,
+    EVENT_BEFORE_LLM_CALL,
+    EVENT_BEFORE_TOOL_EXECUTE,
+    EVENT_ON_ERROR,
+    EVENT_ON_SESSION_END,
+    HookManager,
 )
 from ..interfaces import (
     ContextAssembler,
@@ -96,6 +113,10 @@ class LifecycleOrchestrator:
         self._tool_call_records: List[ToolCallRecord] = []
         self._start_time: float = 0.0
         self._should_exit_flag: bool = False
+        self._system_state: SystemState = SystemState()
+
+        # Hook 管理器
+        self._hook_manager: HookManager = HookManager()
 
         # 阶段一缓存的不可变数据
         self._cached_guides: Optional[GuidesBundle] = None
@@ -105,6 +126,18 @@ class LifecycleOrchestrator:
     # ------------------------------------------------------------------
     # 公开入口
     # ------------------------------------------------------------------
+
+    def register_hook(self, event: str, hook: Hook) -> None:
+        """注册一个生命周期 Hook。
+
+        代理到内部 HookManager。用户通过此方法在框架生命周期节点
+        插入自定义逻辑。
+
+        Args:
+            event: 生命周期事件名（建议使用 harness.hooks.events 中的常量）。
+            hook: Hook 函数，签名 ``(context: HookContext) -> None``。
+        """
+        self._hook_manager.register(event, hook)
 
     def run(self) -> None:
         """启动并运行完整的会话生命周期。
@@ -123,6 +156,9 @@ class LifecycleOrchestrator:
             self._phase_loop(ctx)
         except Exception as e:
             logger.error(f"Orchestrator error: {e}")
+            self._hook_manager.trigger(
+                EVENT_ON_ERROR, e, self._system_state
+            )
             if isinstance(e, (ComponentNotRegisteredError, OrchestratorError)):
                 raise
             raise OrchestratorError(str(e)) from e
@@ -151,12 +187,14 @@ class LifecycleOrchestrator:
             ComponentNotRegisteredError: InputAdapter 未注册。
         """
         self._start_time = time.time()
+        self._system_state.phase = "init"
         logger.info("Phase 1: Session initialization starting")
 
         # 1. InputAdapter（必需组件）
         adapter = self.container.resolve(InputAdapter)
         user_request = adapter.receive()
         self._session_id = user_request.session_id
+        self._system_state.session_id = user_request.session_id
         logger.debug(f"Received user request: {user_request.text}")
 
         # 检查退出信号 — 用户在第一轮就发出退出指令时直接跳到阶段三
@@ -172,7 +210,13 @@ class LifecycleOrchestrator:
             try:
                 # 构建 GuideContext（使用 AssemblyContext）
                 guide_ctx = AssemblyContext(user_request=user_request)
+                guide_ctx = self._hook_manager.trigger(
+                    EVENT_BEFORE_GUIDE_GENERATION, guide_ctx, self._system_state
+                )
                 guides = guide_provider.get_guides(guide_ctx)
+                guides = self._hook_manager.trigger(
+                    EVENT_AFTER_GUIDE_GENERATION, guides, self._system_state
+                )
                 logger.debug(f"Guides loaded: identity={guides.identity[:50]}...")
             except Exception as e:
                 logger.warning(f"GuideProvider.get_guides() failed: {e}")
@@ -262,6 +306,7 @@ class LifecycleOrchestrator:
             initial_ctx: 阶段一产出的 AssemblyContext。
         """
         logger.info("Phase 2: Conversation loop starting")
+        self._system_state.phase = "loop"
 
         ctx = initial_ctx
         assembler = self._resolve_optional(ContextAssembler)
@@ -278,6 +323,9 @@ class LifecycleOrchestrator:
                 ))
 
             # === 外层：组装上下文 ===
+            ctx = self._hook_manager.trigger(
+                EVENT_BEFORE_ASSEMBLE, ctx, self._system_state
+            )
             if assembler:
                 try:
                     messages = assembler.assemble(ctx)
@@ -286,6 +334,9 @@ class LifecycleOrchestrator:
                     messages = self._fallback_assemble(ctx)
             else:
                 messages = self._fallback_assemble(ctx)
+            messages = self._hook_manager.trigger(
+                EVENT_AFTER_ASSEMBLE, messages, self._system_state
+            )
 
             # === 内层：LLM + Tool call 循环 ===
             tool_iterations = 0
@@ -303,9 +354,15 @@ class LifecycleOrchestrator:
                     break
 
                 try:
+                    messages = self._hook_manager.trigger(
+                        EVENT_BEFORE_LLM_CALL, messages, self._system_state
+                    )
                     response = self.call_llm(
                         messages_to_dicts(messages),
                         tool_definitions_to_openai(self._cached_tools),
+                    )
+                    response = self._hook_manager.trigger(
+                        EVENT_AFTER_LLM_CALL, response, self._system_state
                     )
                 except Exception as e:
                     logger.error(f"LLM call failed: {e}")
@@ -337,6 +394,9 @@ class LifecycleOrchestrator:
                             error = f"Failed to parse tool arguments: {e}"
                             after_ts = time.time()
                         else:
+                            tc = self._hook_manager.trigger(
+                                EVENT_BEFORE_TOOL_EXECUTE, tc, self._system_state
+                            )
                             try:
                                 if tool_router and tool_router.has_tool(tc.function.name):
                                     result = tool_router.execute(
@@ -361,7 +421,18 @@ class LifecycleOrchestrator:
                             success = error is None
                             content = result
 
-                        # 记录到 tool_call_records（使用正式类型 ToolCallRecord）
+                        # 触发 after_tool_execute
+                        tool_result = ToolResult(
+                            success=success, content=content, error=error
+                        )
+                        tool_result = self._hook_manager.trigger(
+                            EVENT_AFTER_TOOL_EXECUTE, tool_result, self._system_state
+                        )
+                        success = tool_result.success
+                        content = tool_result.content
+                        error = tool_result.error
+
+                        # 记录到 tool_call_records（使用可能已被 Hook 修改的值）
                         self._tool_call_records.append(ToolCallRecord(
                             tool_call_id=tc.id,
                             tool_name=tc.function.name,
@@ -440,8 +511,14 @@ class LifecycleOrchestrator:
         Sensor.sense(trajectory) → ToolRouter.shutdown()（清理 MCP 子进程等资源）→ 清理内部状态。
         """
         logger.info("Phase 3: Session end starting")
+        self._system_state.phase = "end"
 
-        # 1. Sensor（可选）
+        # 1. on_session_end Hook（Sensor 之前）
+        trajectory = self._hook_manager.trigger(
+            EVENT_ON_SESSION_END, trajectory, self._system_state
+        )
+
+        # 2. Sensor（可选）
         sensor = self._resolve_optional(Sensor)
         if sensor:
             try:
@@ -450,7 +527,12 @@ class LifecycleOrchestrator:
             except Exception as e:
                 logger.warning(f"Sensor.sense() failed: {e}")
 
-        # 2. ToolRouter shutdown（统一清理，分发到各 Provider）
+        # 3. after_sensor Hook
+        self._hook_manager.trigger(
+            EVENT_AFTER_SENSOR, trajectory, self._system_state
+        )
+
+        # 4. ToolRouter shutdown（统一清理，分发到各 Provider）
         if self._cached_tool_router:
             try:
                 self._cached_tool_router.shutdown()
@@ -458,7 +540,7 @@ class LifecycleOrchestrator:
             except Exception as e:
                 logger.warning(f"ToolRouter.shutdown() failed: {e}")
 
-        # 3. 清理内部状态
+        # 5. 清理内部状态
         self._history.clear()
         self._tool_call_records.clear()
         self._should_exit_flag = False
