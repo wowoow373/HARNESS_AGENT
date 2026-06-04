@@ -74,11 +74,11 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
                                       │ └────────────────────┘ │
                                       └────────────────────────┘
 
-                     ┌──────────────────┐
-                     │   InputAdapter   │
-                     │ receive()/send() │
-                     └────────┬─────────┘
-                              │ UserRequest / Response
+                     ┌──────────────────────┐
+                     │    InputAdapter      │
+                     │ receive()/send(事件) │
+                     └────────┬─────────────┘
+                              │ UserRequest / AdapterEvent
               ┌───────────────┼───────────────┐
               ▼               ▼               │
      ┌────────────┐  ┌───────────────┐        │
@@ -120,7 +120,7 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
 
 | 组件 | 职责 | 调用阶段 |
 |------|------|---------|
-| **InputAdapter** | 输入输出适配：接收用户输入、返回响应 | 会话初始化 + 每轮用户输入 + 每次 text 响应输出 |
+| **InputAdapter** | 输入输出适配：接收用户输入，事件驱动推送响应流（前后台分离，batch-11） | 会话初始化 + 每轮用户输入 + LLM 响应时逐字段推送事件 |
 | **GuideProvider** | 前馈控制：行动前提供指导 | 会话初始化（一次） |
 | **ContextAssembler** | 上下文工程：拼接所有信息给 LLM | 每轮外层循环开始 |
 | **ToolRouter** | 工具路由：合并 SystemToolProvider 和 MCPAdapter，按名分发执行（框架内部，非 DI） | 会话初始化 + 运行时 |
@@ -167,11 +167,15 @@ Harness Agent Template 是一个面向个人开发者和小型团队的**模块�
    内层循环（Tool call 连续生成）：
    8. 框架将消息和工具定义转为 LLM 原生格式 → 调用 LLM → Response
    9. 触发 after_llm_call Hook
-   10. 判断 Response 内容：
-       - 包含 tool_uses → 每个 tool 依次触发 before/after_tool_execute Hook
-                       → ToolRouter.execute()
-                       → tool_use + tool_result 追加到 message list → 回到步骤 8
-       - 包含 text    → InputAdapter.send(response) → 用户 → 跳出内层循环
+   10. 按 LLM Response 字段顺序逐一推送事件（batch-11 事件驱动）：
+       - thinking → InputAdapter.send(ThinkingEvent)
+       - 包含 tool_uses → 每个 tool 依次：
+           → InputAdapter.send(ToolCallEvent)
+           → 触发 before/after_tool_execute Hook
+           → ToolRouter.execute()
+           → InputAdapter.send(ToolResultEvent)
+           → tool_use + tool_result 追加到 message list → 回到步骤 8
+       - 包含 text    → InputAdapter.send(TextEvent) + InputAdapter.send(StopEvent) → 跳出内层循环
        
        （注：LLM 单次响应可同时包含 text 和 tool_uses，非互斥）
 

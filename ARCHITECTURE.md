@@ -4,7 +4,7 @@
 >
 > **核心理念**：框架只定义接口契约与编排流程，所有具体行为由用户通过"实现接口 + 依赖注入"来自定义。
 >
-> **版本: 1.0** — 全部 10 个批次已完成（2026-06-04）
+> **版本: 1.1** — 全部 11 个批次已完成（2026-06-04）
 
 ---
 
@@ -24,7 +24,7 @@
 ```
 控制流（框架固定，按会话生命周期）：
   【会话初始化】InputAdapter.receive() → GuideProvider → MemoryBackend → ToolRouter → ContextAssembler
-  【多轮循环】   ContextAssembler → LLM → [Tool] → InputAdapter.send() → InputAdapter.receive() → ContextAssembler
+  【多轮循环】   ContextAssembler → LLM → [Tool] → InputAdapter.send(事件流) → InputAdapter.receive() → ContextAssembler
   【会话结束】   Sensor → MemoryBackend
 
 数据流（组件自定义）：
@@ -48,7 +48,7 @@
 
 | 组件 | 职责 | 输入 | 输出/副作用 |
 |------|------|------|------------|
-| **InputAdapter** | 输入输出适配：接收用户输入并返回响应 | 用户原始输入 | 标准化 UserRequest / 输出 Response |
+| **InputAdapter** | 输入输出适配：接收用户输入，将事件流呈现给前端 | 用户原始输入 | 标准化 UserRequest / 推送 AdapterEvent 事件流 |
 | **GuideProvider** | 前馈控制：行动前提供指导 | 当前会话状态、环境状态 | GuidesBundle |
 | **ContextAssembler** | 上下文工程：拼接所有信息给 LLM | 大包对象（guides、history、memories、system_state） | List[Message] |
 | **ToolRouter** | 工具路由：合并多个 Provider 的工具并按名分发执行（框架内部，非 DI） | SystemToolProvider + MCPAdapter | 合并工具列表 / 路由执行结果 |
@@ -64,9 +64,9 @@
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                            InputAdapter                              │
-│                         receive() / send()                           │
+│                  receive() / send(event: AdapterEvent)               │
 └──────────────────────────┬──────────────────────┬────────────────────┘
-                           │ UserRequest           │ Response
+                           │ UserRequest           │ AdapterEvent 流
                            ▼                       ▲
                   ┌─────────────────┐              │
                   │  GuideProvider  │              │
@@ -74,9 +74,9 @@
                            │ GuidesBundle          │
                            ▼                       │
     ┌──────────────┐ ┌──────────────────┐ ┌───────┴───────┐
-    │ MemoryBackend│◀│ ContextAssembler │ │     LLM       │
-    └──────┬───────┘ └──────────────────┘ └───────┬───────┘
-           ▲                  ▲                    │
+    │ MemoryBackend│◀│ ContextAssembler │ │  编排器内层循环  │
+    └──────┬───────┘ └──────────────────┘ │  逐字段推送事件  │
+           ▲                  ▲            └───────┬───────┘
            │                  │                    │
            │    ┌─────────────┴─────────────┐      │
            │    │   ToolRouter (框架内部)     │◀─────┘
@@ -265,30 +265,39 @@ execute(args: Dict[str, Any]) → ToolResult  # 工具执行
 
 ---
 
-### 3.7 InputAdapter（输入适配器）
+### 3.7 InputAdapter（输入适配器，batch-11 重设计）
 
-**职责**：接收用户的原始输入并转化为标准化的请求；将 Agent 的响应以合适的形式返回给用户。
+**职责**：接收用户的原始输入并转化为标准化的请求；将编排器产生的事件流以前后台分离的方式呈现给用户。
 
 **接口方法**：
 ```
 receive() → UserRequest
-send(response: Response) → void
+send(event: AdapterEvent) → void
 ```
 
 **调用时机**：
 - `receive()`：会话初始化时调用，以及后续每轮用户有新输入时调用
-- `send()`：每次 LLM 返回 text 响应时调用
+- `send()`：编排器内层循环中按 LLM 输出字段顺序逐一推送事件。**不再**在每次 LLM 返回 text 时集中调用一次，而是每个语义单元（thinking、tool_call、tool_result、text、stop）即时推送
 
-**UserRequest 大包对象**：
-- text：用户主输入文本
-- attachments：附件列表（文件、图片、链接等）
-- context：附加上下文（地理位置、当前文件、用户画像等）
-- system_state：系统当前状态（会话阶段、运行模式、资源状态等）
-- session_id：会话标识
-- metadata：领域扩展桶
+**事件类型**（batch-11 新增，定义在 `harness.interfaces.types`）：
+
+| 事件 | 对应 LLM Response 字段 | 触发时机 | 前端分类 |
+|------|----------------------|---------|---------|
+| **ThinkingEvent** | `response.thinking` | thinking 非空时立即推送 | 后台（debug） |
+| **ToolCallEvent** | `response.tool_uses[i]` | 每个 tool_use 执行前推送 | 后台 |
+| **ToolResultEvent** | 工具执行完毕 | 每个 tool 执行完成后推送（含耗时/成功/错误） | 后台 |
+| **TextEvent** | `response.text` | text 非空时推送 | **前台** |
+| **StopEvent** | `response.stop_reason` | 内层循环 break 后推送 | 会话控制 |
+
+**关键设计变迁（batch-11）**：
+- `send()` 签名从 `send(response: Response)` 改为 `send(event: AdapterEvent)`，实现**前后台分离**
+- 编排器**不再裸用 `logger.info("🔧 ...")`** 输出工具调用，改为推送 `ToolCallEvent` / `ToolResultEvent`
+- `_summarize_args()` / `_summarize_result()` 从编排器迁移到前端实现（CliAdapter）
+- 前端自主决定每个事件类型的呈现方式：`TextEvent` → stdout（前台对话），工具/thinking 事件 → stderr（后台状态），`StopEvent` → no-op
+- `ThinkingEvent` 默认仅 debug 模式输出，不再被静默丢弃
 
 **实现示例**：
-- **CliAdapter**（已实现：`harness/components/input_adapter/cli_adapter.py`）：从 stdin 读取输入，stdout 打印响应
+- **CliAdapter**（已实现：[harness/components/input_adapter/cli_adapter.py](harness/components/input_adapter/cli_adapter.py)）：从 stdin 读取输入，`isinstance` 分发事件：TextEvent→stdout，其余→stderr
 
 ---
 
@@ -364,18 +373,21 @@ on_session_end             → 会话结束清理
    │     ↓                                               │
    │  9. 触发 after_llm_call Hook                        │
    │     ↓                                               │
-   │  10. 判断 Response 内容：                            │
-   │      ├─ 包含 tool_uses：                            │
+   │  10. 按 LLM Response 字段顺序逐一推送事件：          │
+   │      ├─ thinking → adapter.send(ThinkingEvent)      │
+   │      │                                              │
+   │      ├─ 包含 tool_uses（可与 text 共存）：           │
    │      │   → 对每个 tool_use 依次：                   │
-   │      │     触发 before_tool_execute Hook            │
+   │      │     adapter.send(ToolCallEvent)              │
+   │      │     → 触发 before_tool_execute Hook          │
    │      │     → ToolRouter.execute()（查表分发）        │
    │      │     → 触发 after_tool_execute Hook           │
-   │      │   → 将 tool_use + tool_result 转为 LLM       │
-   │      │     原生格式追加到当前 message list           │
+   │      │     → adapter.send(ToolResultEvent)          │
+   │      │   → 将 tool_use + tool_result 追加到 messages│
    │      │   → ↑ 回到步骤 8（继续内层循环）             │
    │      │                                              │
-   │      └─ 如有 text（可与 tool_uses 共存）：          │
-   │          → InputAdapter.send(response) → 用户       │
+   │      └─ text → adapter.send(TextEvent)              │
+   │          → adapter.send(StopEvent)                  │
    │          → 跳出内层循环 ↓                           │
    │                                                     │
    └─────────────────────────────────────────────────────┘
@@ -411,7 +423,8 @@ on_session_end             → 会话结束清理
 - Sensor 在**会话结束阶段**统一评估完整的多轮 Trajectory，而非每轮触发
 - **外层循环**（步骤 6→11）：用户每次新输入触发 `InputAdapter.receive()`，然后完整执行 `ContextAssembler.assemble()`
 - **内层循环**（步骤 8→10）：`tool_use` 触发同一轮内的快速循环，tool result 直接追加到当前 message list 后回传 LLM 继续生成，**不重新走 `ContextAssembler.assemble()`**
-- 多 tool 场景下，`ToolRouter` **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook
+- **事件驱动推送**（batch-11）：编排器按 LLM Response 字段顺序逐一推送 `AdapterEvent`（`ThinkingEvent` → `ToolCallEvent` → `ToolResultEvent` → `TextEvent` → `StopEvent`），前端自主决定每个事件类型的呈现方式（前后台分离）
+- 多 tool 场景下，`ToolRouter` **按顺序串行执行**，每个 Tool 独立触发 before/after_tool_execute Hook，并在执行前后推送 `ToolCallEvent` / `ToolResultEvent`
 - LLM 单次响应可**同时包含 text 和 tool_uses**（非互斥），框架分别处理
 - 框架内部包含**轻量转换层**：将框架类型（Message、ToolDefinition、ToolResult）与 LLM 原生格式互转
 

@@ -33,7 +33,7 @@ Harness 是一个 **模块化 Agent 框架**。它提供：
 1. **按固定顺序调度组件** — 三阶段生命周期（初始化 → 对话循环 → 结束）
 2. **管理组件注册与解析** — 预构造实例的 DI 容器
 3. **开箱即用的 LLM 适配器** — 零依赖 OpenAI 兼容 HTTP 客户端
-4. **完整的数据类型体系** — 17 个 dataclass + 9 个 Protocol + Hook 类型别名
+4. **完整的数据类型体系** — 23 个 dataclass + 10 個 Protocol/Hook 接口（含 batch-11 事件类型）
 5. **消息格式转换层** — 框架类型 ↔ OpenAI dict 双向转换
 
 框架**不包含**任何业务逻辑。你的 Agent 具体做什么（如何压缩上下文、如何评估质量、如何存储记忆），完全由你实现的组件决定。
@@ -54,7 +54,7 @@ harness/
 │   └── llm_adapter.py       # re-export 包装（→ adapters/）
 ├── interfaces/              # 接口与类型定义（正式来源 ★）
 │   ├── __init__.py          # 导出所有类型和接口
-│   ├── types.py             # 17 个正式 dataclass
+│   ├── types.py             # 23 个正式 dataclass（含 batch-11 事件类型）
 │   ├── input_adapter.py     # InputAdapter Protocol
 │   ├── guide_provider.py    # GuideProvider Protocol
 │   ├── context_assembler.py # ContextAssembler Protocol
@@ -148,12 +148,16 @@ harness.run()
 │                                                  │
 │  ┌─ 内层循环（tool 连续调用）─────────────────┐ │
 │  │ 7. call_llm(messages, tools) → Response    │ │
-│  │ 8. 如果有 tool_uses:                       │ │
+│  │ 8. thinking → adapter.send(ThinkingEvent)  │ │
+│  │ 9. 如果有 tool_uses:                       │ │
+│  │    → adapter.send(ToolCallEvent)           │ │
 │  │    → ToolRouter.execute()（查表分发）       │ │
+│  │    → adapter.send(ToolResultEvent)         │ │
 │  │    → 结果追加到 messages                   │ │
 │  │    → 回到步骤 7（继续内层循环）             │ │
-│  │ 9. 如果有 text:                            │ │
-│  │    → InputAdapter.send()                   │ │
+│  │ 10. 如果有 text:                           │ │
+│  │    → adapter.send(TextEvent)               │ │
+│  │    → adapter.send(StopEvent)               │ │
 │  │    → 跳出内层循环                           │ │
 │  └────────────────────────────────────────────┘ │
 │                                                  │
@@ -177,8 +181,9 @@ harness.run()
 | 规则 | 说明 |
 |------|------|
 | **内层循环不走 ContextAssembler** | tool 结果直接追加到 message list，不回退到 assemble 步骤 |
+| **事件驱动推送**（batch-11） | LLM Response 各字段即时转为独立事件推送给前端，前后台分离 |
 | **LLM 单次响应可同时含 text 和 tool_uses** | 编排器分别处理两者，互不排斥 |
-| **多 Tool 串行执行** | 按 LLM 返回的顺序逐个执行 |
+| **多 Tool 串行执行** | 按 LLM 返回的顺序逐个执行，每步推送 ToolCallEvent + ToolResultEvent |
 | **GuidesBundle 和 tools 在阶段一缓存** | 不会每轮都重新获取 |
 | **阶段三在 finally 块中执行** | 即使异常退出，Sensor 也会收到轨迹 |
 
@@ -205,7 +210,7 @@ harness.run()
 
 ### 4.1 InputAdapter（必需）
 
-输入输出适配器，框架与外部世界的唯一通道。
+输入输出适配器，框架与外部世界的唯一通道。batch-11 重设计后采用**事件驱动**模式。
 
 ```python
 class MyAdapter:
@@ -214,15 +219,31 @@ class MyAdapter:
         返回 UserRequest(text="") 或 metadata={"exit": True} 表示退出。"""
         ...
 
-    def send(self, response: "Response") -> None:
-        """将 Agent 响应发送给用户。"""
+    def send(self, event: "AdapterEvent") -> None:
+        """将编排器产生的一个前端事件呈现给用户。
+
+        事件类型（Union，定义在 harness.interfaces.types）:
+        - ThinkingEvent: LLM 思考过程（后台，仅 debug 模式输出）
+        - ToolCallEvent: 工具调用开始（后台）
+        - ToolResultEvent: 工具执行结果（后台）
+        - TextEvent: 模型文本回复（前台对话）
+        - StopEvent: 本轮结束（会话控制，通常 no-op）
+
+        前端通过 isinstance / match-case 分发到不同输出通道。
+        """
         ...
 ```
 
-| 方法 | 调用时机 | 返回值含义 |
-|------|---------|-----------|
-| `receive()` | 阶段一入口 + 每轮外层循环末尾 | `text=""` → 退出；`text="/exit"` → 退出；正常文本 → 继续 |
-| `send(response)` | 每次 LLM 返回 text 时 | 无返回值 |
+| 方法 | 调用时机 | 参数类型 |
+|------|---------|---------|
+| `receive()` | 阶段一入口 + 每轮外层循环末尾 | —（返回 `UserRequest`，`text=""` → 退出） |
+| `send(event)` | 编排器内层循环中按 LLM Response 字段顺序逐一调用 | `AdapterEvent`（Union of 5 event types） |
+
+**事件驱动设计意图**（batch-11）：
+- 编排器不再替前端做展示决策（不再裸用 `logger.info("🔧 ...")`），只负责"产生事实"
+- 前端自主决定每个事件类型的呈现方式：`TextEvent` → stdout（前台对话），工具/thinking 事件 → stderr（后台状态）
+- `ThinkingEvent` 不再被丢弃，作为一等事件推送
+- `send()` 从"收到一个整包 Response"改为"收到独立的事件对象"，每个语义单元即时推送
 
 **退出信号**（`_should_exit` 的判断逻辑）：
 - `text` 为空字符串或仅空白字符
@@ -409,7 +430,7 @@ container.register(Sensor, sensor)
 
 ## 5. 数据类型速查
 
-所有正式类型定义在 [harness/interfaces/types.py](harness/interfaces/types.py)，共 17 个 dataclass。旧的 `harness.core.types` 已废弃（import 时触发 `DeprecationWarning`）。
+所有正式类型定义在 [harness/interfaces/types.py](harness/interfaces/types.py)，共 23 个 dataclass（含 batch-11 新增的 5 种事件类型 + 1 个 Union 别名）。旧的 `harness.core.types` 已废弃（import 时触发 `DeprecationWarning`）。
 
 ### 5.1 UserRequest
 
@@ -579,7 +600,32 @@ class Trajectory:
     metadata: Dict[str, Any] = {}
 ```
 
-### 5.13 数据流向总览
+### 5.13 AdapterEvent 事件类型（batch-11 新增）
+
+InputAdapter.send() 接收的事件对象。5 种独立 dataclass + 1 个 Union 类型别名。
+
+```python
+from harness.interfaces.types import (
+    AdapterEvent,       # Union[ThinkingEvent, ToolCallEvent, ToolResultEvent, TextEvent, StopEvent]
+    ThinkingEvent,      # .content: str — LLM 思考过程（后台，仅 debug 模式输出）
+    ToolCallEvent,      # .call_id, .tool_name, .arguments — 工具调用开始（后台）
+    ToolResultEvent,    # .call_id, .tool_name, .success, .result, .error, .duration_ms — 工具结果（后台）
+    TextEvent,          # .content: str — 模型文本回复（前台对话）
+    StopEvent,          # .stop_reason: str — 本轮结束（会话控制，通常 no-op）
+)
+```
+
+| 事件 | 对应 LLM Response 字段 | 前端分类 | 典型输出通道 |
+|------|----------------------|---------|-------------|
+| `ThinkingEvent` | `response.thinking` | 后台 | stderr（仅 debug 模式） |
+| `ToolCallEvent` | `response.tool_uses[i]` | 后台 | stderr |
+| `ToolResultEvent` | 工具执行完毕 | 后台 | stderr |
+| `TextEvent` | `response.text` | **前台** | stdout |
+| `StopEvent` | `response.stop_reason` | 会话控制 | no-op |
+
+前端通过 `isinstance(event, TextEvent)` / `match case` 分发到不同输出通道。
+
+### 5.14 数据流向总览
 
 ```
 InputAdapter.receive() 产出      → UserRequest
@@ -587,6 +633,7 @@ GuideProvider.get_guides() 产出  → GuidesBundle（含 Example）
 ContextAssembler.assemble() 消费 ← AssemblyContext
   (内含: UserRequest, GuidesBundle, ToolDefinition[], Message[], MemoryItem[], SystemState)
 call_llm 产出                     → Response（含 ToolCall[]）
+  编排器逐字段推送                 → AdapterEvent（ThinkingEvent | ToolCallEvent | ToolResultEvent | TextEvent | StopEvent）
   ToolRouter.execute() 记录       → ToolCallRecord
 Sensor.sense() 消费              ← Trajectory
   (内含: Message[], ToolCallRecord[], SystemState, session_id)
@@ -1078,7 +1125,7 @@ class MdMemory:
 ```python
 from harness.core.container import DIContainer
 from harness.core.orchestrator import LifecycleOrchestrator
-from harness.interfaces import InputAdapter, UserRequest, Response, GuidesBundle
+from harness.interfaces import InputAdapter, UserRequest, Response, GuidesBundle, TextEvent
 
 class TestMyComponent:
     def test_basic_flow(self):
@@ -1089,14 +1136,17 @@ class TestMyComponent:
             def __init__(self):
                 self.inputs = ["hello"]
                 self.outputs = []
+                self.texts = []
                 self.idx = 0
             def receive(self):
                 if self.idx < len(self.inputs):
                     t = self.inputs[self.idx]; self.idx += 1
                     return UserRequest(text=t)
                 return UserRequest(text="")
-            def send(self, resp):
-                self.outputs.append(resp.text)
+            def send(self, event):
+                self.outputs.append(event)
+                if isinstance(event, TextEvent):
+                    self.texts.append(event.content)
 
         container.register(InputAdapter, MockAdapter())
 
@@ -1114,7 +1164,7 @@ class TestMyComponent:
 
         orch._phase_loop(ctx)
         adapter = container.resolve(InputAdapter)
-        assert adapter.outputs[0] == "mock reply"
+        assert adapter.texts[0] == "mock reply"
 ```
 
 ### 12.2 运行测试
@@ -1158,7 +1208,7 @@ A: 如果你注册了 ContextAssembler，编排器用它组装消息。如果没
 
 ### Q: 数据结构的正式类型在哪里定义？
 
-A: 所有 17 个数据类型统一定义在 `harness/interfaces/types.py`。`harness.core.types` 中的旧类型已标记为 deprecated（导入时会触发 `DeprecationWarning`），不应在新代码中使用。
+A: 所有 23 个数据类型统一定义在 `harness/interfaces/types.py`（含 batch-11 新增的 5 种事件类型 + `AdapterEvent` Union）。`harness.core.types` 中的旧类型已标记为 deprecated（导入时会触发 `DeprecationWarning`），不应在新代码中使用。
 
 ### Q: ToolCall 的 parse_arguments() 方法在哪？
 

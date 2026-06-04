@@ -1,6 +1,8 @@
 # 02 — 接口契约汇总
 
 > **唯一真相源**。所有批次实现组件时，以此文件中的签名为准。组件间通过此契约解耦，装配时按此校验。
+>
+> **版本: 1.1** — 含 batch-11 InputAdapter 事件驱动重设计
 
 ---
 
@@ -209,6 +211,38 @@ ToolTransform:
 
 注：`arg_transform` 和 `result_transform` 为高级程序化转换钩子。当声明式配置（`expose_as`、`arg_defaults` 等）不够用时使用。两者均为可选，默认不启用。
 
+### Adapter 事件类型（batch-11 新增）
+
+`InputAdapter.send()` 的入参。5 种独立 dataclass，通过 `AdapterEvent` Union 别名约束。
+
+```
+AdapterEvent = Union[ThinkingEvent, ToolCallEvent, ToolResultEvent, TextEvent, StopEvent]
+
+ThinkingEvent:
+  content : str = ""                  — LLM 思考/推理过程（后台）
+
+ToolCallEvent:
+  call_id   : str = ""                — 工具调用唯一标识
+  tool_name : str = ""                — 工具名称
+  arguments : Dict[str, Any]          — 调用参数
+
+ToolResultEvent:
+  call_id     : str = ""              — 工具调用唯一标识
+  tool_name   : str = ""              — 工具名称
+  success     : bool = True           — 执行是否成功
+  result      : Any = None            — 成功时的结果
+  error       : Optional[str] = None  — 失败时的错误信息
+  duration_ms : float                 — 执行耗时（毫秒）
+
+TextEvent:
+  content : str = ""                  — 模型文本回复（前台对话）
+
+StopEvent:
+  stop_reason : str = "end_turn"      — 本轮结束原因
+```
+
+设计决策：使用独立 dataclass + Union 而非基类继承，与代码库现有风格一致，`isinstance` / `match-case` 分发无需基类。
+
 ### MemoryItem
 
 从 MemoryBackend 检索出的记忆项。
@@ -228,21 +262,36 @@ MemoryItem:
 
 ---
 
-### InputAdapter
+### InputAdapter（batch-11 重设计）
 
-职责：输入输出适配。接收用户原始输入转为标准化请求，将 Agent 响应返回给用户。
+职责：输入输出适配。接收用户原始输入转为标准化请求，将编排器产生的事件流以前后台分离的方式呈现给用户。
 
 ```
 interface InputAdapter:
     receive() → UserRequest
-    send(response: Response) → void
+    send(event: AdapterEvent) → void
 ```
+
+**AdapterEvent 类型**（`Union[ThinkingEvent, ToolCallEvent, ToolResultEvent, TextEvent, StopEvent]`）：
+
+| 事件 | 对应 LLM Response 字段 | 前端分类 |
+|------|----------------------|---------|
+| `ThinkingEvent(content)` | `response.thinking` | 后台（仅 debug 模式） |
+| `ToolCallEvent(call_id, tool_name, arguments)` | `response.tool_uses[i]` | 后台 |
+| `ToolResultEvent(call_id, tool_name, success, result, error, duration_ms)` | 工具执行完毕 | 后台 |
+| `TextEvent(content)` | `response.text` | **前台** |
+| `StopEvent(stop_reason)` | `response.stop_reason` | 会话控制 |
 
 调用时机：
 - `receive()`：会话初始化时由框架调用，以及后续每轮用户有新输入时由框架调用
-- `send()`：每次 LLM 返回包含 text 的 Response 时由框架调用
+- `send()`：编排器内层循环中按 LLM Response 字段顺序逐一调用（不再攒批，每字段即时推送）
 
-实现示例：`CliAdapter` — stdin 读取输入，stdout 打印响应
+**关键设计变迁（batch-11）**：
+- `send()` 签名从 `send(response: Response)` 改为 `send(event: AdapterEvent)`
+- 编排器不再裸用 `logger.info("🔧 ...")` 输出工具调用，改为推送 `ToolCallEvent` / `ToolResultEvent`
+- 前端自主决定每个事件类型的呈现方式（stdout/stderr/TUI 面板），实现前后台分离
+
+实现示例：`CliAdapter` — stdin 读取输入，`isinstance` 分发事件：TextEvent→stdout（前台），其余→stderr（后台）
 
 ---
 

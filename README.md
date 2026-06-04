@@ -15,7 +15,8 @@
 - **三阶段生命周期** — 会话初始化 → 多轮对话循环 → 会话结束，控制流清晰固定
 - **零依赖 LLM 适配器** — 内置 OpenAI 兼容 HTTP 客户端，自动从 `.env` / 环境变量读取配置
 - **Duck Typing 组件** — 不强制继承基类，有对应方法就能工作
-- **完整的类型与异常体系** — 17 个 dataclass 类型 + 10 个 Protocol/Hook 接口 + 完善的异常层次
+- **事件驱动输出** — InputAdapter `send()` 接收独立事件对象，实现前后台分离（stdout/stderr 独立通道）
+- **完整的类型与异常体系** — 23 个 dataclass 类型 + 10 个 Protocol/Hook 接口 + 完善的异常层次
 
 ---
 
@@ -106,7 +107,7 @@ harness_agent/
 │   │   ├── tool_router.py              # ToolRouter（框架内部，合并 Provider 路由）
 │   ├── interfaces/                   # 接口与类型定义（正式来源）
 │   │   ├── __init__.py               # 导出 17 类型 + 10 接口
-│   │   ├── types.py                  # 17 个正式 dataclass
+│   │   ├── types.py                  # 23 个正式 dataclass（含事件类型）
 │   │   ├── input_adapter.py          # InputAdapter Protocol
 │   │   ├── guide_provider.py         # GuideProvider Protocol
 │   │   ├── context_assembler.py      # ContextAssembler Protocol
@@ -145,8 +146,8 @@ harness_agent/
 │       │   └── default_mcp_adapter.py # DefaultMCPAdapter
 │       ├── sensor/                   # Batch-07
 │       │   └── logging_sensor.py      # LoggingSensor — 轨迹写入 episodic 记忆
-│       └── input_adapter/            # Batch-08
-│           └── cli_adapter.py         # CliAdapter — stdin/stdout 交互
+│       └── input_adapter/            # Batch-08 + Batch-11
+│           └── cli_adapter.py         # CliAdapter — 事件驱动 stdin/stdout/stderr
 ├── tests/                            # 测试套件（598 tests）
 │   ├── test_container.py             # DI 容器测试
 │   ├── test_config.py                # 配置加载器测试
@@ -197,7 +198,7 @@ harness_agent/
 
 | 组件 | 职责 | 必需？ |
 |------|------|--------|
-| **InputAdapter** | 输入输出适配：接收用户输入、发送 Agent 响应 | ✅ 是 |
+| **InputAdapter** | 输入输出适配：接收用户输入，以事件驱动方式推送 Agent 响应流 | ✅ 是 |
 | **GuideProvider** | 前馈控制：行动前提供身份定义与行为规则 | ❌ 否 |
 | **ContextAssembler** | 上下文工程：将所有信息源组装成发给 LLM 的消息列表 | ❌ 否（强烈推荐） |
 | **MemoryBackend** | 记忆层：跨会话持久化存储与检索 | ❌ 否 |
@@ -222,7 +223,7 @@ harness_agent/
   外层循环（每轮用户输入）:
     ContextAssembler.assemble() → before_llm_call Hook
     → 内层循环（tool 连续调用）: LLM → ToolRouter.execute()
-    → InputAdapter.send() → InputAdapter.receive()
+    → InputAdapter.send(事件流) → InputAdapter.receive()
 
 阶段三：会话结束（整个会话只执行一次）
   组装 Trajectory → on_session_end Hook → Sensor.sense()
@@ -278,8 +279,9 @@ python tests/test_real_llm_trace.py
 - ✅ **Batch-08**：InputAdapter 默认实现（CliAdapter — stdin/stdout 命令行交互）
 - ✅ **Batch-09**：Hook 生命周期拦截系统（11 个事件、HookManager、Orchestrator 集成）
 - ✅ **Batch-10**：DI 装配集成（YAML 装配、CLI 入口、Profile 模板、端到端测试）
+- ✅ **Batch-11**：事件驱动适配器（InputAdapter `send()` 改为事件驱动，前后台分离，5 种事件类型）
 
-🎉 **全部 10 个批次已完成！** 598 个测试全部通过。
+🎉 **全部 11 个批次已完成！** 598 个测试全部通过。
 
 > 完整路线与每个 batch 的设计文档，见 [sdd/batches/](sdd/batches/)。
 
