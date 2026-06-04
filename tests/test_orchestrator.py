@@ -264,7 +264,7 @@ class TestPhaseInit:
             def receive(self):
                 return UserRequest(text="hello")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, MockAdapter())
@@ -285,7 +285,7 @@ class TestPhaseInit:
             def receive(self):
                 return UserRequest(text="hello")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         class MockGuideProvider:
@@ -312,7 +312,7 @@ class TestPhaseInit:
             def receive(self):
                 return UserRequest(text="hello")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         class MockMemory:
@@ -348,7 +348,7 @@ class TestPhaseInit:
             def receive(self):
                 return UserRequest(text="hello")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, MockAdapter())
@@ -375,7 +375,7 @@ class TestPhaseInit:
         class ExitAdapter:
             def receive(self):
                 return UserRequest(text="/exit")
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, ExitAdapter())
@@ -418,9 +418,9 @@ class TestPhaseLoop:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
-                text = response.text if hasattr(response, "text") else str(response)
-                self.outputs.append(text)
+            def send(self, event):
+                content = event.content if hasattr(event, "content") else str(event)
+                self.outputs.append(content)
 
         container.register(InputAdapter, MockAdapter())
         return container
@@ -442,7 +442,8 @@ class TestPhaseLoop:
         orch._phase_loop(ctx)
 
         adapter = container.resolve(InputAdapter)
-        assert len(adapter.outputs) == 1
+        # TextEvent + StopEvent = 2 events per turn
+        assert len(adapter.outputs) == 2
         assert "Hello" in adapter.outputs[0]
         # history 现在按事件流顺序: user → assistant
         assert len(orch._history) == 2
@@ -471,7 +472,8 @@ class TestPhaseLoop:
         orch._phase_loop(ctx)
 
         adapter = container.resolve(InputAdapter)
-        assert len(adapter.outputs) == 2
+        # 2 turns x (TextEvent + StopEvent) = 4 events
+        assert len(adapter.outputs) == 4
         # history 现在是: user → assistant → user → assistant
         assert len(orch._history) == 4
         assert orch._history[0].role == "user"
@@ -651,7 +653,11 @@ class TestPhaseLoop:
         assert user_msgs[0].content == "File contents: hello world"
 
     def test_text_and_tool_uses_coexistence(self):
-        """text + tool_uses 共存场景。"""
+        """text + tool_uses 共存场景。
+
+        LLM first returns text + tool_uses, then after tool execution
+        returns a final text response incorporating the tool result.
+        """
         container = self._setup_container_with_adapter()
 
         class MockSystemToolProvider:
@@ -672,21 +678,37 @@ class TestPhaseLoop:
 
                 class TR:
                     success = True
-                    content = "data"
+                    content = "data from /tmp/x"
                     error = None
 
                 return TR()
 
         container.register(SystemToolProvider, MockSystemToolProvider())
 
+        # Simulate a realistic LLM: first call returns text + tool_uses,
+        # second call (after tool results are provided) returns final text
+        call_count = [0]
+
         def coexistence_llm(msgs, tools):
-            return Response(
-                text="Let me check that file for you",
-                tool_uses=[
-                    ToolCall(id="c1", function=ToolCallFunction(name="read", arguments='{"path": "/tmp/x"}')),
-                ],
-                stop_reason="end_turn",
-            )
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call: text + tool_use
+                return Response(
+                    text="Let me check that file for you",
+                    tool_uses=[
+                        ToolCall(id="c1", function=ToolCallFunction(
+                            name="read", arguments='{"path": "/tmp/x"}'
+                        )),
+                    ],
+                    stop_reason="end_turn",
+                )
+            else:
+                # Second call: final text response (tool result incorporated)
+                return Response(
+                    text="I checked /tmp/x: it contains 'data from /tmp/x'",
+                    tool_uses=[],
+                    stop_reason="end_turn",
+                )
 
         orch = LifecycleOrchestrator(
             container, call_llm=coexistence_llm
@@ -701,7 +723,8 @@ class TestPhaseLoop:
         assert len(stp.executed) == 1
 
         adapter = container.resolve(InputAdapter)
-        assert any("Let me check" in str(o) for o in adapter.outputs)
+        # 最终响应发送给用户（不含中间 text）
+        assert any("contains 'data from /tmp/x'" in str(o) for o in adapter.outputs)
         assert any(
             "Let me check" in h.content
             for h in orch._history
@@ -774,7 +797,7 @@ class TestPhaseLoop:
             def receive(self):
                 return UserRequest(text="")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, EmptyAdapter())
@@ -938,10 +961,8 @@ class TestRun:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
-                self.outputs.append(
-                    response.text if hasattr(response, "text") else str(response)
-                )
+            def send(self, event):
+                self.outputs.append(event)
 
         class MockGuideProvider:
             def get_guides(self, ctx):
@@ -1029,7 +1050,7 @@ class TestRun:
                     return UserRequest(text="hello")
                 raise RuntimeError("Simulated error")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         class SpySensor:
@@ -1071,10 +1092,9 @@ class TestRun:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
-                self.outputs.append(
-                    response.text if hasattr(response, "text") else str(response)
-                )
+            def send(self, event):
+                content = event.content if hasattr(event, "content") else str(event)
+                self.outputs.append(content)
 
         container.register(InputAdapter, MockAdapter())
 
@@ -1087,7 +1107,8 @@ class TestRun:
         orch.run()
 
         adapter = container.resolve(InputAdapter)
-        assert len(adapter.outputs) == 1
+        # TextEvent + StopEvent = 2 events per turn
+        assert len(adapter.outputs) == 2
         assert adapter.outputs[0] == "minimal response"
 
 
@@ -1117,7 +1138,7 @@ class TestHarnessFlow:
             def receive(self):
                 return UserRequest(text="hi")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, MockAdapter())
@@ -1161,10 +1182,9 @@ class TestContextAssemblerCallCount:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
-                self.outputs.append(
-                    response.text if hasattr(response, "text") else str(response)
-                )
+            def send(self, event):
+                content = event.content if hasattr(event, "content") else str(event)
+                self.outputs.append(content)
 
         class SpyAssembler:
             def __init__(self):

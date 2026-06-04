@@ -3,6 +3,8 @@
 > 面向个人开发者与小型团队的**模块化 Agent 框架模板**。
 >
 > 核心理念：**框架只定义接口契约与编排流程，所有具体行为由你通过「实现接口 + 依赖注入」来自定义。**
+>
+> **版本: 1.0**
 
 ---
 
@@ -40,12 +42,27 @@ export LLM_BASE_URL="https://api.openai.com/v1"
 ### 2. 运行最小示例
 
 ```bash
+# Python API 方式
 python examples/minimal_agent.py
+
+# YAML 装配方式（batch-10 新增）
+python main.py run --config profiles/coding-assistant/harness.yaml
 ```
 
 输入任意内容即可与 Agent 对话，输入 `/exit` 退出。
 
-### 3. 编写你的第一个 Agent
+### 3. 创建你的第一个 Agent 项目
+
+```bash
+# 从模板生成项目
+python main.py init --profile coding-assistant my-agent
+cd my-agent
+
+# 编辑 harness.yaml 按需替换组件，然后启动
+python ../main.py run
+```
+
+### 4. 编写自定义 Agent（Python API）
 
 ```python
 from harness.di import Harness
@@ -64,7 +81,7 @@ container.register(InputAdapter, CliAdapter())
 container.register(MemoryBackend, memory)
 container.register(Sensor, LoggingSensor(memory=memory))
 container.register(ContextAssembler, SimpleAssembler(max_history=50))
-container.register(GuideProvider, FileGuideProvider("AGENTS.md"))
+container.register(GuideProvider, FileGuideProvider(paths=["AGENTS.md"]))
 
 llm = MinimalLLMAdapter()  # auto-reads .env
 Harness.from_container(container, call_llm=llm).run()
@@ -103,11 +120,14 @@ harness_agent/
 │   ├── adapters/                     # 外部系统适配器
 │   │   └── llm_adapter.py            # MinimalLLMAdapter（OpenAI 兼容）
 │   ├── config/                       # 配置模块
-│   │   ├── loader.py                 # ConfigLoader + ProfileConfig
-│   │   └── .env                      # API 配置
-│   └── messaging/                    # 消息格式转换
-│       ├── __init__.py               # 导出转换函数
-│       └── builder.py                # Message↔dict + ToolDefinition→OpenAI
+│   │   ├── loader.py                 # ConfigLoader（TOML profile 加载）
+│   │   └── yaml_assembler.py         # YamlAssembler（YAML DI 装配）
+│   ├── hooks/                        # Hook 系统（Batch-09）
+│   │   ├── events.py                 # 11 个生命周期事件常量
+│   │   └── hook_manager.py           # HookManager（注册/注销/触发）
+│   ├── messaging/                    # 消息格式转换
+│   │   ├── __init__.py               # 导出转换函数
+│   │   └── builder.py                # Message↔dict + ToolDefinition→OpenAI
 │   └── components/                    # 组件默认实现
 │       ├── memory_backend/            # Batch-03
 │       │   └── md_memory.py           # MdMemory — Markdown 文件存储
@@ -120,36 +140,46 @@ harness_agent/
 │       │   ├── inline_tool.py        # @inline_tool 装饰器
 │       │   ├── system_tools.py       # ReadFileTool / WriteFileTool / ShellTool
 │       │   └── default_system_tool_provider.py
-│       └── mcp_manager/              # Batch-06
-│           ├── mcp_client.py         # MCPClient (JSON-RPC stdio)
-│           └── default_mcp_adapter.py # DefaultMCPAdapter
-│       ├── sensor/                      # Batch-07
-│       │   └── logging_sensor.py         # LoggingSensor — 轨迹写入 episodic 记忆
-│       └── input_adapter/                # Batch-08
-│           └── cli_adapter.py            # CliAdapter — stdin/stdout 交互
-├── tests/                            # 测试套件
+│       ├── mcp_manager/              # Batch-06
+│       │   ├── mcp_client.py         # MCPClient (JSON-RPC stdio)
+│       │   └── default_mcp_adapter.py # DefaultMCPAdapter
+│       ├── sensor/                   # Batch-07
+│       │   └── logging_sensor.py      # LoggingSensor — 轨迹写入 episodic 记忆
+│       └── input_adapter/            # Batch-08
+│           └── cli_adapter.py         # CliAdapter — stdin/stdout 交互
+├── tests/                            # 测试套件（598 tests）
 │   ├── test_container.py             # DI 容器测试
 │   ├── test_config.py                # 配置加载器测试
 │   ├── test_exceptions.py            # 异常体系测试
 │   ├── test_orchestrator.py          # 编排器测试
 │   ├── test_llm_adapter.py           # LLM 适配器测试
 │   ├── test_messaging.py             # 消息转换层测试
-│   ├── test_md_memory.py             # MdMemory 测试（Batch-03）
-│   ├── test_guide_provider.py        # FileGuideProvider 测试（Batch-04）
-│   ├── test_context_assembler.py     # SimpleAssembler 测试（Batch-05）
-│   ├── test_sensor.py                 # LoggingSensor 测试（Batch-07）
-│   ├── test_input_adapter.py         # CliAdapter 测试（Batch-08）
-│   ├── test_e2e_sensor_adapter.py    # Sensor + CliAdapter E2E 测试（Batch-07/08）
-│   ├── test_tool_router.py           # ToolRouter 测试（Batch-06）
-│   ├── test_system_tool_provider.py  # SystemToolProvider 测试（Batch-06）
-│   ├── test_mcp_adapter.py           # MCPAdapter 测试（Batch-06）
-│   ├── test_e2e_tool_flow.py         # Tool E2E 测试（Batch-06）
-│   ├── test_black_box.py             # 黑盒集成测试（含真实 API）
+│   ├── test_md_memory.py             # MdMemory 测试
+│   ├── test_guide_provider.py        # FileGuideProvider 测试
+│   ├── test_context_assembler.py     # SimpleAssembler 测试
+│   ├── test_sensor.py                # LoggingSensor 测试
+│   ├── test_input_adapter.py         # CliAdapter 测试
+│   ├── test_e2e_sensor_adapter.py    # Sensor + CliAdapter E2E 测试
+│   ├── test_tool_router.py           # ToolRouter 测试
+│   ├── test_system_tool_provider.py  # SystemToolProvider 测试
+│   ├── test_mcp_adapter.py           # MCPAdapter 测试
+│   ├── test_e2e_tool_flow.py         # Tool E2E 测试
+│   ├── test_hooks.py                 # Hook 系统测试（Batch-09）
+│   ├── test_yaml_assembler.py        # YamlAssembler 测试（Batch-10）
+│   ├── test_e2e_assembly.py          # 端到端装配测试（Batch-10）
+│   ├── test_black_box.py             # 黑盒集成测试
 │   └── test_real_llm_trace.py        # 真实 LLM 端到端 trace
+├── main.py                           # CLI 入口：harness init / run（Batch-10）
+├── profiles/                         # 领域模板（Batch-10）
+│   └── coding-assistant/
+│       ├── profile.toml              # 模板元数据
+│       ├── harness.yaml              # DI 装配声明
+│       ├── AGENTS.md                 # Agent 指导
+│       └── README.md                 # 使用说明
 ├── examples/                         # 示例代码
-│   ├── minimal_agent.py              # 最小多轮对话 Agent
-│   └── AGENTS.md                    # 示例指导文件
-├── sdd/                              # 软件设计文档
+│   ├── minimal_agent.py              # 最小多轮对话 Agent（Python API）
+│   └── AGENTS.md                     # 示例指导文件
+├── sdd/                              # 软件设计文档（SDD）
 │   ├── 01-architecture.md            # 架构总览
 │   ├── 02-interfaces.md              # 接口设计
 │   ├── 03-project-structure.md       # 项目结构
@@ -238,7 +268,7 @@ python tests/test_real_llm_trace.py
 当前已完成的批次：
 
 - ✅ **Batch-01**：内核 MVP（DI 容器、三阶段编排器、配置加载器、LLM 适配器、异常体系、消息构造）
-- ✅ **Batch-02**：正式接口定义（17 个 dataclass + 9 个 Protocol + 1 个 Hook 别名）
+- ✅ **Batch-02**：正式接口定义（17 个 dataclass + 10 个 Protocol/Hook 接口 + 1 个 Hook 别名）
 - ✅ **Batch-02-1**：类型迁移（`_Minimal*` → 正式类型，删除桥接方法，补齐测试覆盖）
 - ✅ **Batch-03**：MemoryBackend 默认实现（MdMemory — Markdown 文件存储）
 - ✅ **Batch-04**：GuideProvider 默认实现（FileGuideProvider — Markdown 解析）
@@ -246,11 +276,10 @@ python tests/test_real_llm_trace.py
 - ✅ **Batch-06**：Tool 与 MCP 体系（ToolRouter + SystemToolProvider + MCPAdapter + MCPHandler）
 - ✅ **Batch-07**：Sensor 默认实现（LoggingSensor — 轨迹持久化到 episodic 命名空间）
 - ✅ **Batch-08**：InputAdapter 默认实现（CliAdapter — stdin/stdout 命令行交互）
+- ✅ **Batch-09**：Hook 生命周期拦截系统（11 个事件、HookManager、Orchestrator 集成）
+- ✅ **Batch-10**：DI 装配集成（YAML 装配、CLI 入口、Profile 模板、端到端测试）
 
-即将实现：
-
-- ⏳ Batch-09：Hook 生命周期拦截
-- ⏳ Batch-10：完整 DI 装配方案
+🎉 **全部 10 个批次已完成！** 598 个测试全部通过。
 
 > 完整路线与每个 batch 的设计文档，见 [sdd/batches/](sdd/batches/)。
 

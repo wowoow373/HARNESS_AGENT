@@ -3,6 +3,8 @@
 > **定位**：一个面向个人开发者与小型团队的模块化 Agent Harness 模板。核心不是提供最强的性能，而是提供最方便的裁剪与扩展能力。
 >
 > **核心理念**：框架只定义接口契约与编排流程，所有具体行为由用户通过"实现接口 + 依赖注入"来自定义。
+>
+> **版本: 1.0** — 全部 10 个批次已完成（2026-06-04）
 
 ---
 
@@ -431,14 +433,15 @@ on_session_end             → 会话结束清理
 
 ## 五、配置与装配
 
-### 5.1 双层配置模型
+### 5.1 三层配置模型
 
 | 层级 | 职责 | 载体 |
 |------|------|------|
-| **声明层** | 标识"使用哪个领域模板" | TOML 文件 |
-| **装配层** | 定义"组件如何实例化、依赖如何注入" | 用户代码（DI Container） |
+| **元数据层** | 标识"使用哪个领域模板" | `profile.toml`（TOML） |
+| **装配层（声明式）** | 定义"组件如何实例化、依赖如何注入"（80% 场景） | `harness.yaml`（YAML） |
+| **装配层（命令式）** | 复杂场景的编程装配（20% 场景） | Python API（`DIContainer`） |
 
-### 5.2 TOML 声明文件
+### 5.2 TOML 元数据文件
 
 仅作轻量身份标识，不承担装配逻辑：
 
@@ -450,19 +453,64 @@ template = "coding-assistant"
 version = "0.1.0"
 
 [modules]
-# 仅声明启用的模块清单（可选，用于文档生成和自检）
 input_adapter = true
 guide_provider = true
 context_assembler = true
 system_tool_provider = true
-mcp_adapter = true
+mcp_adapter = false
 sensor = true
 memory_backend = true
 ```
 
-### 5.3 依赖注入容器
+### 5.3 YAML 装配文件（声明式，batch-10 新增）
 
-DI 容器采用**预构造实例注册**模式：用户创建组件实例并手动注入依赖，然后注册到容器。容器仅负责存储和按接口类型解析，不管理对象生命周期。这保证个人开发者可以完全控制组件创建，无需理解复杂的 DI 作用域概念。
+覆盖 80% 的简单装配场景。用户通过 YAML 声明组件、参数和依赖关系，`YamlAssembler` 自动构建 DI 容器：
+
+```yaml
+# harness.yaml
+harness:
+  version: "1.0"
+  profile: coding-assistant
+
+  components:
+    - interface: InputAdapter
+      implementation: harness.components.input_adapter.CliAdapter
+
+    - interface: MemoryBackend
+      implementation: harness.components.memory_backend.MdMemory
+      params:
+        path: ./memory
+
+    - interface: ContextAssembler
+      implementation: harness.components.context_assembler.SimpleAssembler
+      params:
+        max_history: 50
+      inject:
+        memory: MemoryBackend   # ← 引用已注册的组件
+
+    - interface: Sensor
+      implementation: harness.components.sensor.LoggingSensor
+      inject:
+        memory: MemoryBackend
+
+    - interface: SystemToolProvider
+      implementation: harness.components.tool.DefaultSystemToolProvider
+
+  hooks:
+    - event: before_llm_call
+      handler: my_project.hooks.log_request
+
+  llm:
+    provider: openai
+    model: gpt-4o
+
+# 使用:
+#   python main.py run --config harness.yaml
+```
+
+### 5.4 依赖注入容器（命令式，Python API）
+
+DI 容器采用**预构造实例注册**模式。YAML 装配是此 API 的上层封装，两者产出同一个 `DIContainer`：
 
 ```python
 # 1. 创建共享基础设施（同一个 MemoryBackend 实例）
@@ -470,12 +518,9 @@ memory = MdMemory(path="./memory")
 
 # 2. 创建组件实例（构造函数注入依赖）
 input_adapter = CliAdapter()
-guide_provider = FileGuideProvider(rules_file="AGENTS.md")
-context_assembler = SimpleAssembler(memory=memory)
+guide_provider = FileGuideProvider(paths=["AGENTS.md"])
+context_assembler = SimpleAssembler(memory=memory, max_history=50)
 sensor = LoggingSensor(memory=memory)
-# 注：CliAdapter 和 LoggingSensor 现已实现，分别位于
-# harness/components/input_adapter/cli_adapter.py 和
-# harness/components/sensor/logging_sensor.py
 
 # 3. 注册到容器
 container = DIContainer()
@@ -484,25 +529,22 @@ container.register(GuideProvider, guide_provider)
 container.register(ContextAssembler, context_assembler)
 container.register(Sensor, sensor)
 container.register(MemoryBackend, memory)
-
-# 系统工具 — 内置工具自动注入
 container.register(SystemToolProvider, DefaultSystemToolProvider())
 
 # MCP 适配层（不注册即裁切）
 container.register(MCPAdapter, DefaultMCPAdapter(
-    servers=[MCPServerConfig(name="fs", command="npx",
-                             args=["-y", "@anthropic/mcp-filesystem", "/tmp"])],
-    transforms={"filesystem_delete": ToolTransform(hidden=True)},
+    mcp_configs=[MCPServerConfig(name="fs", command="npx",
+                   args=["-y", "@anthropic/mcp-filesystem", "/tmp"])],
+    transforms={},
 ))
 
 # 4. 启动 Harness
-#    框架内部：创建 ToolRouter → 注册 SystemToolProvider + MCPAdapter
 harness = Harness.from_container(container, call_llm=my_llm)
 harness.run()
 ```
 
 **设计意图**：
-- TOML 是"声明意图"，代码是"实现意图"
+- YAML 是"声明装配"，Python API 是"编程装配"——两者互补，产出同一个 `DIContainer`
 - 用户通过构造函数参数完全控制组件行为
 - 框架不关心组件如何创建，只关心它们满足接口契约
 - 同一个实例注册到容器，自然保证 MemoryBackend 在 ContextAssembler 和 Sensor 之间共享
@@ -512,61 +554,40 @@ harness.run()
 
 ## 六、领域模板结构
 
-每个领域模板是一个独立的文件夹，包含预设的组件装配方案：
+每个领域模板是一个独立的文件夹，包含预设的组件装配方案和 Agent 指导文件：
 
 ```
 profiles/
 ├── coding-assistant/
-│   ├── profile.toml          # 模板元信息
-│   ├── README.md             # 领域说明与最佳实践
-│   ├── input/
-│   │   └── cli_adapter.py    # 默认 InputAdapter 骨架
-│   ├── guides/
-│   │   └── project_guide.py  # 默认 GuideProvider 骨架
-│   ├── mcp/
-│   │   └── mcp_adapter.py    # 默认 MCPAdapter 骨架
-│   ├── sensors/
-│   │   ├── pytest_sensor.py
-│   │   └── mypy_sensor.py
-│   ├── context/
-│   │   └── simple_assembler.py # 默认 ContextAssembler 实现
-│   └── examples/
-│       └── demo_project/     # 可运行的示例
+│   ├── profile.toml          # 模板元数据（ConfigLoader）
+│   ├── harness.yaml          # DI 装配声明（YamlAssembler）
+│   ├── AGENTS.md             # Agent 指导文件（身份+规则）
+│   └── README.md             # 使用说明与自定义指南
 │
-├── travel-assistant/
-│   ├── profile.toml
-│   ├── README.md
-│   ├── guides/
-│   │   └── travel_guide.py
-│   ├── mcp/
-│   │   └── travel_tools.py   # 旅行领域 MCP 配置
-│   ├── sensors/
-│   │   └── preference_sensor.py
-│   └── context/
-│       └── travel_assembler.py
-│
-└── research-assistant/
-    ├── profile.toml
-    └── ...
+├── travel-assistant/         # 未来
+└── research-assistant/       # 未来
 ```
+
+**两种配置文件的分工**：
+- `profile.toml` — 轻量模板元数据（name, description, template, version, modules），由 `ConfigLoader` 读取
+- `harness.yaml` — 完整的 DI 装配声明（组件、Hook、LLM 配置），由 `YamlAssembler` 读取并自动构建容器
 
 **使用方式**：
 
 ```bash
 # 从模板创建项目
-harness init --profile coding-assistant my-project
+python main.py init --profile coding-assistant my-project
 
 # 生成的项目结构
 cd my-project
 ls
-# main.py          ← 用户在此装配 DI 容器
-# profile.toml     ← 轻量声明
-# src/
-#   ├── input.py
-#   ├── guides.py
-#   ├── mcp.py      ← 用户MCP配置
-#   ├── sensors.py
-#   └── context.py
+# harness.yaml     ← 编辑此文件替换组件/添加 Hook
+# profile.toml     ← 模板元数据
+# AGENTS.md        ← 编辑此文件配置 Agent 行为
+# README.md        ← 使用说明
+
+# 启动 Agent
+python ../main.py run --config harness.yaml
 ```
 
 ---

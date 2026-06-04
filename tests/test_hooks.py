@@ -339,8 +339,8 @@ class TestOrchestratorHookIntegration:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
-                text = response.text if hasattr(response, "text") else str(response)
+            def send(self, event):
+                text = event.content if hasattr(event, "content") else str(event)
                 self.outputs.append(text)
 
         container.register(InputAdapter, MockAdapter())
@@ -385,7 +385,7 @@ class TestOrchestratorHookIntegration:
             def receive(self):
                 return UserRequest(text="/exit")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, ExitAdapter())
@@ -647,7 +647,7 @@ class TestOrchestratorHookIntegration:
             def receive(self):
                 raise RuntimeError("Adapter failure")
 
-            def send(self, r):
+            def send(self, event):
                 pass
 
         container = DIContainer()
@@ -799,8 +799,8 @@ class TestHookEndToEnd:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
-                text = response.text if hasattr(response, "text") else str(response)
+            def send(self, event):
+                text = event.content if hasattr(event, "content") else str(event)
                 self.outputs.append(text)
 
         container.register(InputAdapter, MockAdapter())
@@ -884,8 +884,9 @@ class TestHookEndToEnd:
         orch.run()
 
         adapter = container.resolve(InputAdapter)
-        assert len(adapter.outputs) == 1
-        assert adapter.outputs[0] == "no_hook_reply"
+        # TextEvent + StopEvent per turn
+        text_outputs = [o for o in adapter.outputs if o == "no_hook_reply"]
+        assert len(text_outputs) == 1
 
     def test_e2e_hook_exception_does_not_crash_session(self):
         """hook 异常时会话继续正常执行。"""
@@ -906,8 +907,9 @@ class TestHookEndToEnd:
         orch.run()
 
         adapter = container.resolve(InputAdapter)
-        assert len(adapter.outputs) == 1
-        assert adapter.outputs[0] == "recovered"
+        # TextEvent + StopEvent per turn
+        text_outputs = [o for o in adapter.outputs if o == "recovered"]
+        assert len(text_outputs) == 1
 
     def test_e2e_multiple_hooks_modify_chain(self):
         """多个 hook 依次修改数据，最终效果叠加。"""

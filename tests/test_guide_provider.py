@@ -1196,8 +1196,8 @@ class TestOrchestratorIntegration:
                     return UserRequest(text="write a test")
                 return UserRequest(text="")  # 退出
 
-            def send(self, response):
-                outputs.append(response.text)
+            def send(self, event):
+                outputs.append(getattr(event, "content", str(event)))
 
         # 5. Mock LLM
         def mock_llm(messages, tools=None):
@@ -1212,9 +1212,9 @@ class TestOrchestratorIntegration:
         harness = Harness.from_container(container, call_llm=mock_llm)
         harness.run()
 
-        # 7. 验证编排器正常完成
-        assert len(outputs) == 1
-        assert outputs[0] == "I'll write the test first."
+        # 7. 验证编排器正常完成 (TextEvent + StopEvent per turn)
+        text_outputs = [o for o in outputs if o == "I'll write the test first."]
+        assert len(text_outputs) == 1
 
         # 8. 验证 ContextAssembler 收到了正确的 GuidesBundle
         assert len(captured_contexts) >= 1
@@ -1247,8 +1247,8 @@ class TestOrchestratorIntegration:
                     return UserRequest(text="hello")
                 return UserRequest(text="")
 
-            def send(self, response):
-                outputs.append(response.text)
+            def send(self, event):
+                outputs.append(getattr(event, "content", str(event)))
 
         def mock_llm(messages, tools=None):
             return Response(text="hi there", stop_reason="end_turn")
@@ -1260,5 +1260,6 @@ class TestOrchestratorIntegration:
         harness = Harness.from_container(container, call_llm=mock_llm)
         harness.run()
 
-        assert len(outputs) == 1
-        assert outputs[0] == "hi there"
+        # TextEvent + StopEvent per turn
+        text_outputs = [o for o in outputs if o == "hi there"]
+        assert len(text_outputs) == 1

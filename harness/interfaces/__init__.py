@@ -12,8 +12,9 @@
 模块边界：此包不依赖任何实现模块（core/、adapters/、components/）。
 """
 
-# ── 大包对象（17 个 dataclass） ──────────────────────────────────────────
+# ── 大包对象（17 个 dataclass + 6 个事件类型） ────────────────────────────
 from .types import (
+    AdapterEvent,
     AssemblyContext,
     Attachment,
     EnvState,
@@ -22,12 +23,17 @@ from .types import (
     MemoryItem,
     Message,
     Response,
+    StopEvent,
     SystemState,
+    TextEvent,
+    ThinkingEvent,
     ToolCall,
+    ToolCallEvent,
     ToolCallFunction,
     ToolCallRecord,
     ToolDefinition,
     ToolResult,
+    ToolResultEvent,
     ToolTransform,
     Trajectory,
     UserRequest,
@@ -46,7 +52,7 @@ from .mcp_handler import MCPHandler
 from .hook import Hook, HookContext
 
 __all__ = [
-    # 17 个大包对象
+    # 17 个大包对象 + 6 个事件类型
     "UserRequest",
     "SystemState",
     "Attachment",
@@ -64,6 +70,13 @@ __all__ = [
     "ToolResult",
     "ToolTransform",
     "MemoryItem",
+    # batch-11: Adapter 事件类型
+    "ThinkingEvent",
+    "ToolCallEvent",
+    "ToolResultEvent",
+    "TextEvent",
+    "StopEvent",
+    "AdapterEvent",
     # 10 个组件接口（9 个 Protocol + 1 个函数类型别名）
     "InputAdapter",
     "GuideProvider",

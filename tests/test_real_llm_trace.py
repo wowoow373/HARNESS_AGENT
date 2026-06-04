@@ -196,8 +196,8 @@ class SingleTurnAdapter:
             return UserRequest(text=t)
         return UserRequest(text="")  # 空 → 退出
 
-    def send(self, response):
-        text = getattr(response, "text", str(response))
+    def send(self, event):
+        text = getattr(event, "text", str(event))
         self.outputs.append(text)
 
 # 3.2 构建 ContextAssembler (简单组装)
@@ -306,8 +306,8 @@ class MultiTurnAdapter:
             return UserRequest(text=t)
         return UserRequest(text="")
 
-    def send(self, response):
-        text = getattr(response, "text", str(response))
+    def send(self, event):
+        text = getattr(event, "text", str(event))
         self.outputs.append(text)
 
 class MultiTurnSensor:

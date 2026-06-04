@@ -1,24 +1,27 @@
 # 04 — 批次路线图
 
 > 定义所有开发批次的执行顺序、依赖关系和产出目标。agent 在开始工作时先读此文件，确定自己在整体中的位置。
+>
+> **版本: 1.1** — 全部 11 个批次已完成 🎉
 
 ---
 
 ## 一、批次总览
 
-| # | 批次名称 | 目标一句话 | 依赖 | 主要产出 |
-|---|---------|-----------|------|---------|
-| 01 | mvp | DI 容器 + 生命周期编排 + 配置加载 + LLM 适配器 + 组件接口占位 | 无 | `harness/core/*`, `harness/interfaces/*`, `harness/adapters/*`, `harness/config/*`, `harness/messaging/*`, `harness/di.py` |
-| 02 | interfaces | 所有组件的抽象接口 + 大包对象定义 | 01 | `harness/interfaces/*` |
-| 02-1 | interface-tests | 将 core/ 迁移为正式接口类型 + 全量接口测试 | 02 | 更新 `harness/core/*`, `harness/adapters/*`, `harness/messaging/*`; 新增 `tests/test_interfaces_*.py` |
-| 03 | memory-backend | MemoryBackend 接口 + MdMemory 实现 | 02-1 | `harness/components/memory_backend/` |
-| 04 | guide-provider | GuideProvider 接口 + FileGuideProvider 实现 | 02-1 | `harness/components/guide_provider/` |
-| 05 | context-assembler | ContextAssembler 接口 + SimpleAssembler 实现 | 02-1, 03, 04 | `harness/components/context_assembler/` |
-| 06 | tool-mcp-manager | Tool 抽象 + SystemToolProvider + MCPAdapter + MCPHandler + ToolRouter(框架内部) + 系统基础 Tool，删除 ToolRegistry/MCPManager | 02-1 | `harness/components/tool/`, `harness/components/mcp_manager/`, `harness/core/tool_router.py` |
-| 07 | sensor | Sensor 接口 + LoggingSensor 实现 | 02-1, 03 | `harness/components/sensor/` |
-| 08 | input-adapter | InputAdapter 接口 + CliAdapter 实现 | 02-1 | `harness/components/input_adapter/` |
-| 09 | hooks | Hook 系统（注册、链式调用、所有 Hook 点） | 01 | `harness/hooks/*` |
-| 10 | di-assembly | 端到端装配 + 集成测试 + 最少示例 | 01-09 | `main.py`, 集成测试, profiles/coding-assistant/ |
+| # | 批次名称 | 状态 | 目标一句话 | 依赖 | 主要产出 |
+|---|---------|------|-----------|------|---------|
+| 01 | mvp | ✅ | DI 容器 + 生命周期编排 + 配置加载 + LLM 适配器 + 组件接口占位 | 无 | `harness/core/*`, `harness/interfaces/*`, `harness/adapters/*`, `harness/config/*`, `harness/messaging/*`, `harness/di.py` |
+| 02 | interfaces | ✅ | 所有组件的抽象接口 + 大包对象定义 | 01 | `harness/interfaces/*` |
+| 02-1 | interface-tests | ✅ | 将 core/ 迁移为正式接口类型 + 全量接口测试 | 02 | 更新 `harness/core/*`, `harness/adapters/*`, `harness/messaging/*`; 新增 `tests/test_interfaces_*.py` |
+| 03 | memory-backend | ✅ | MemoryBackend 接口 + MdMemory 实现 | 02-1 | `harness/components/memory_backend/` |
+| 04 | guide-provider | ✅ | GuideProvider 接口 + FileGuideProvider 实现 | 02-1 | `harness/components/guide_provider/` |
+| 05 | context-assembler | ✅ | ContextAssembler 接口 + SimpleAssembler 实现 | 02-1, 03, 04 | `harness/components/context_assembler/` |
+| 06 | tool-mcp-manager | ✅ | Tool 抽象 + SystemToolProvider + MCPAdapter + MCPHandler + ToolRouter(框架内部) + 系统基础 Tool，删除 ToolRegistry/MCPManager | 02-1 | `harness/components/tool/`, `harness/components/mcp_manager/`, `harness/core/tool_router.py` |
+| 07 | sensor | ✅ | Sensor 接口 + LoggingSensor 实现 | 02-1, 03 | `harness/components/sensor/` |
+| 08 | input-adapter | ✅ | InputAdapter 接口 + CliAdapter 实现 | 02-1 | `harness/components/input_adapter/` |
+| 09 | hooks | ✅ | Hook 系统（注册、链式调用、所有 Hook 点） | 01 | `harness/hooks/*` |
+| 10 | di-assembly | ✅ | 端到端装配 + YAML 装配 + CLI 入口 + 集成测试 + Profile 模板 | 01-09 | `main.py`, `harness/config/yaml_assembler.py`, `profiles/coding-assistant/`, 集成测试 |
+| 11 | event-driven-adapter | ✅ | InputAdapter.send() 改为事件驱动：5 种事件类型，前后台分离 | 08, 01 | `harness/interfaces/types.py`（+事件类型）, `cli_adapter.py`, `orchestrator.py` |
 
 ---
 
@@ -47,6 +50,8 @@
 09-hooks            ← 依赖 01（DI 容器基础设施 + 生命周期点）
     ↓
 10-di-assembly      ← 依赖 01-09 全部
+    ↓
+11-event-driven     ← 依赖 08（InputAdapter 接口、CliAdapter）、01（编排器）
 ```
 
 ---
@@ -184,16 +189,45 @@
 
 ---
 
-### 10 — di-assembly（装配集成）
+### 10 — di-assembly（装配集成）✅
 
 **范围：**
-- `main.py` CLI 入口（`harness init / run`）
-- 完整 DI 容器装配，全部默认组件实例连接
-- 端到端集成测试：从 InputAdapter 进、LLM 调用（可用 mock）、到 Sensor 写出
-- `coding-assistant` 模板最小骨架
+- `harness/config/yaml_assembler.py` — YAML 装配加载器（`YamlAssembler`）。通过 `harness.yaml` 声明式注册组件、注入依赖、注册 Hook、配置 LLM
+- `main.py` CLI 入口（`harness init` — 从领域模板生成项目 / `harness run` — 按 YAML 装配启动 Agent）
+- 完整 DI 容器装配，全部默认组件实例连接（Python API + YAML 双路径）
+- `Harness.register_hook()` 公开方法（供 YamlAssembler 在装配后注册 Hook）
+- 端到端集成测试：从 InputAdapter 进、LLM 调用（mock）、tool use 循环、到 Sensor 写出、跨装配记忆持久化
+- `coding-assistant` 模板骨架（`profile.toml` + `harness.yaml` + `AGENTS.md` + `README.md`）
 - 全局验收标准验证（对照 `06-acceptance.md`）
 
-**注意**：`_Minimal*` → 正式类型的迁移已在 batch-02-1 完成，batch-10 不再涉及类型替换。
+**YAML 装配与 Python API 关系**：YAML 是 Python API 的上层封装（不是替代），覆盖 80% 简单场景。
+两者产出同一个 `DIContainer`，用户可自由选择或混合使用。
+
+**新增依赖**：PyYAML（唯二新增的第三方依赖）
+
+**测试**：57 个新增测试（41 unit + 16 e2e），598 个总测试全部通过
+
+---
+
+### 11 — event-driven-adapter（事件驱动适配器）✅
+
+**范围：**
+- 新增 5 种事件类型（`ThinkingEvent`, `ToolCallEvent`, `ToolResultEvent`, `TextEvent`, `StopEvent`）+ `AdapterEvent` Union 类型别名
+- `InputAdapter.send()` 签名改为 `send(self, event: AdapterEvent)`（从接收整包 Response 改为事件驱动）
+- `CliAdapter.send()` 重写：`isinstance` 分发事件，TextEvent→stdout（前台），工具事件→stderr（后台）
+- `_summarize_args()` / `_summarize_result()` 从编排器迁移到 CliAdapter
+- 编排器内层循环：按 LLM Response 字段逐一推送事件，不再裸用 `logger.info("🔧 ...")` 输出工具调用
+- 全量测试更新（~10 个测试文件的 mock adapter）
+
+**设计原则**：编排器只负责"产生事实"（解析 LLM 输出 → 执行工具 → 推事件），前端负责"如何呈现"（stdout/stderr/TUI 面板）。
+
+**不在范围：**
+- 流式输出（TextEvent 的 `is_delta` 字段预留但本次不实现）
+- TUI 适配器
+- 不改变 `Response` 类型（LLM 适配器的返回格式）
+- 不改变 `receive()` 签名
+
+**测试**：全量测试通过
 
 ---
 

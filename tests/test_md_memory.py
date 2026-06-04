@@ -663,8 +663,8 @@ class TestProtocolCompliance:
                     return UserRequest(text="我需要用 Python 写异步代码")
                 return UserRequest(text="")  # 第二次调用触发退出
 
-            def send(self, response):
-                outputs.append(response.text)
+            def send(self, event):
+                outputs.append(getattr(event, "content", str(event)))
 
         container.register(InputAdapter, TestAdapter())
         container.register(MemoryBackend, m)
@@ -678,8 +678,9 @@ class TestProtocolCompliance:
         harness.run()
 
         # 4. 验证编排器正常完成（Phase 1 的 search() 没有抛异常）
-        assert len(outputs) == 1
-        assert outputs[0] == "mock reply"
+        # TextEvent + StopEvent per turn
+        text_outputs = [o for o in outputs if o == "mock reply"]
+        assert len(text_outputs) == 1
         # MdMemory 中的 episodic 记忆仍然存在
         assert m.read("session-001", "episodic") == "用户讨论了 Python async/await 的使用"
 

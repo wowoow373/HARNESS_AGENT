@@ -25,11 +25,16 @@ from ..interfaces.types import (
     GuidesBundle,
     Message,
     Response,
+    StopEvent,
     SystemState,
+    TextEvent,
+    ThinkingEvent,
     ToolCall,
+    ToolCallEvent,
     ToolCallRecord,
     ToolDefinition,
     ToolResult,
+    ToolResultEvent,
     Trajectory,
     UserRequest,
 )
@@ -293,11 +298,15 @@ class LifecycleOrchestrator:
 
         内层循环（同一轮内 tool_use 连续生成）：
           3. self.call_llm(messages, tools) → Response
-          4. 处理 Response（text 和 tool_uses 可共存）：
-             a. 如有 tool_uses → 每个 tool 经 ToolRouter 查表分发执行
+          4. 按 LLM 输出字段顺序逐一推送事件：
+             a. thinking → adapter.send(ThinkingEvent)
+             b. 每个 tool_use → adapter.send(ToolCallEvent)
+                → ToolRouter 查表分发执行
+                → adapter.send(ToolResultEvent)
                 → tool_use + tool_result 追加到 messages
-             b. 如有 text → InputAdapter.send(response) → 跳出内层循环
-             c. 如仅有 tool_uses 无 text → 回到步骤 3
+             c. text → adapter.send(TextEvent) + adapter.send(StopEvent)
+                → 跳出内层循环
+             d. 如仅有 tool_uses 无 text → 回到步骤 3
           5. 回到外层循环：InputAdapter.receive() → 更新 ctx → 回到步骤 1
 
         退出条件：用户发出退出信号或空输入。
@@ -347,10 +356,11 @@ class LifecycleOrchestrator:
                         f"Exceeded max tool iterations ({self._MAX_TOOL_ITERATIONS}). "
                         "Breaking inner loop to prevent infinite tool-calling."
                     )
+                    adapter.send(StopEvent(stop_reason="max_iterations"))
                     break
                 if not self.call_llm:
                     logger.warning("call_llm not set, skipping LLM call")
-                    # 无 LLM 时模拟一次文本响应后跳出
+                    adapter.send(StopEvent(stop_reason="no_llm"))
                     break
 
                 try:
@@ -368,7 +378,11 @@ class LifecycleOrchestrator:
                     logger.error(f"LLM call failed: {e}")
                     raise
 
-                # --- 处理 tool_uses ---
+                # --- ① thinking → ThinkingEvent ---
+                if response.thinking:
+                    adapter.send(ThinkingEvent(content=response.thinking))
+
+                # --- ② tool_uses → ToolCallEvent → 执行 → ToolResultEvent ---
                 if response.tool_uses:
                     # 构造含 tool_calls 的 assistant message 并追加到 messages
                     assistant_msg = build_assistant_message(response)
@@ -381,7 +395,7 @@ class LifecycleOrchestrator:
                         tool_calls=list(response.tool_uses),
                     ))
 
-                    # 串行执行每个 tool
+                    # 串行执行每个 tool，每步推送事件
                     for tc in response.tool_uses:
                         before_ts = time.time()
                         args: Dict[str, Any] = {}
@@ -391,9 +405,30 @@ class LifecycleOrchestrator:
                         try:
                             args = json.loads(tc.function.arguments)
                         except json.JSONDecodeError as e:
+                            # JSON 解析失败：推送 ToolCallEvent + ToolResultEvent
                             error = f"Failed to parse tool arguments: {e}"
                             after_ts = time.time()
+                            adapter.send(ToolCallEvent(
+                                call_id=tc.id,
+                                tool_name=tc.function.name,
+                                arguments={},
+                            ))
+                            adapter.send(ToolResultEvent(
+                                call_id=tc.id,
+                                tool_name=tc.function.name,
+                                success=False,
+                                error=error,
+                                duration_ms=(after_ts - before_ts) * 1000,
+                            ))
+                            # 继续执行下一个 tool_use（当前已失败）
                         else:
+                            # 推送 ToolCallEvent
+                            adapter.send(ToolCallEvent(
+                                call_id=tc.id,
+                                tool_name=tc.function.name,
+                                arguments=args,
+                            ))
+
                             tc = self._hook_manager.trigger(
                                 EVENT_BEFORE_TOOL_EXECUTE, tc, self._system_state
                             )
@@ -410,9 +445,20 @@ class LifecycleOrchestrator:
                             except Exception as e:
                                 error = str(e)
                             after_ts = time.time()
+                            duration_ms = (after_ts - before_ts) * 1000
+
+                            # 推送 ToolResultEvent
+                            adapter.send(ToolResultEvent(
+                                call_id=tc.id,
+                                tool_name=tc.function.name,
+                                success=(error is None),
+                                result=result if error is None else None,
+                                error=error,
+                                duration_ms=duration_ms,
+                            ))
 
                         # 提取 ToolResult 字段
-                        if hasattr(result, "success"):
+                        if result is not None and hasattr(result, "success"):
                             success = result.success
                             content = result.content if hasattr(result, "content") else str(result)
                             if hasattr(result, "error") and result.error:
@@ -454,30 +500,29 @@ class LifecycleOrchestrator:
                             tool_call_id=tc.id,
                         ))
 
-                    # 如果本次 response 有 text → 发给用户 + 跳出内层循环
-                    # （assistant tool_use 消息已在上方统一写入 history）
-                    if response.text:
-                        adapter.send(response)
-                        break
-
-                    # 仅有 tool_uses 无 text → 继续内层循环（回到 LLM）
+                    # text + tool_uses 共存时：
+                    # - 中间文本不发送给用户（是模型的"思考过程"）
+                    # - 继续内层循环，让 LLM 处理 tool 结果后生成最终回复
+                    # （不 break，继续回到 LLM 带 tool 结果）
                     continue
 
-                # --- 处理纯 text 响应（无 tool_uses） ---
+                # --- ③ text → TextEvent + StopEvent → break ---
                 if response.text:
                     messages.append(
                         Message(role="assistant", content=response.text or "")
                     )
-                    adapter.send(response)
+                    adapter.send(TextEvent(content=response.text or ""))
+                    adapter.send(StopEvent(stop_reason=response.stop_reason))
                     self._history.append(
                         Message(role="assistant", content=response.text or "")
                     )
                     break  # 跳出内层循环
 
-                # --- 防御：空响应 ---
+                # --- ④ 防御：空响应 ---
                 logger.warning(
                     "LLM returned empty response (no text, no tool_uses)"
                 )
+                adapter.send(StopEvent(stop_reason="empty_response"))
                 break
 
             # === 外层：等待下一轮用户输入 ===

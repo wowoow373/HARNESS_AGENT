@@ -74,9 +74,9 @@ class TestE2ELocalToolFlow:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
+            def send(self, event):
                 self.outputs.append(
-                    response.text if hasattr(response, "text") else str(response)
+                    event.content if hasattr(event, "content") else str(event)
                 )
 
         class SpyAssembler:
@@ -165,8 +165,8 @@ class TestE2ELocalToolFlow:
                     t = self.inputs[self.idx]; self.idx += 1
                     return UserRequest(text=t)
                 return UserRequest(text="")
-            def send(self, r):
-                self.outputs.append(r.text if hasattr(r, "text") else str(r))
+            def send(self, event):
+                self.outputs.append(event.content if hasattr(event, "content") else str(event))
 
         class SA:
             def __init__(self):
@@ -231,10 +231,12 @@ class TestE2ELocalToolFlow:
         # Step 4: LLM 第二轮被调用并收到工具结果
         assert call_count[0] == 2
 
-        # Step 5: 最终响应发送给用户
+        # Step 5: 最终响应发送给用户 (TextEvent + StopEvent per turn,
+        #          ToolCallEvent + ToolResultEvent per tool call)
         adapter = container.resolve(InputAdapter)
-        assert len(adapter.outputs) == 1
-        assert "hello from e2e test" in adapter.outputs[0]
+        assert len(adapter.outputs) >= 1
+        text_outputs = [o for o in adapter.outputs if "hello from e2e test" in str(o)]
+        assert len(text_outputs) >= 1
 
     def test_e2e_shutdown_cleanup(self):
         """AC-TOOL-12 Step 6-7: _phase_end → shutdown → 状态清理。"""
@@ -295,9 +297,9 @@ class TestE2EMultiProviderFlow:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, response):
+            def send(self, event):
                 self.outputs.append(
-                    response.text if hasattr(response, "text") else str(response)
+                    event.content if hasattr(event, "content") else str(event)
                 )
 
         class MockMCPAdapter:
@@ -458,8 +460,8 @@ class TestToolCallRecordIntegrity:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, r):
-                self.outputs.append(r.text if hasattr(r, "text") else str(r))
+            def send(self, event):
+                self.outputs.append(event.content if hasattr(event, "content") else str(event))
 
         class MockSystemProvider:
             def get_tools(self):
@@ -528,8 +530,8 @@ class TestToolCallRecordIntegrity:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, r):
-                self.outputs.append(r.text if hasattr(r, "text") else str(r))
+            def send(self, event):
+                self.outputs.append(event.content if hasattr(event, "content") else str(event))
 
         class FailingProvider:
             def get_tools(self):
@@ -608,8 +610,8 @@ class TestMCPAdapterOptionality:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, r):
-                self.outputs.append(r.text if hasattr(r, "text") else str(r))
+            def send(self, event):
+                self.outputs.append(event.content if hasattr(event, "content") else str(event))
 
         container.register(InputAdapter, MockAdapter())
 
@@ -644,8 +646,8 @@ class TestMCPAdapterOptionality:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, r):
-                self.outputs.append(r.text if hasattr(r, "text") else str(r))
+            def send(self, event):
+                self.outputs.append(event.content if hasattr(event, "content") else str(event))
 
         class MockMCP:
             def __init__(self):
@@ -716,8 +718,8 @@ class TestContextAssemblerCallCountE2E:
                     return UserRequest(text=t)
                 return UserRequest(text="")
 
-            def send(self, r):
-                self.outputs.append(r.text if hasattr(r, "text") else str(r))
+            def send(self, event):
+                self.outputs.append(event.content if hasattr(event, "content") else str(event))
 
         class SpyAssembler:
             def __init__(self):

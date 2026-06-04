@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
+from harness.interfaces.types import TextEvent
+
 # ============================================================================
 # Shared fixtures
 # ============================================================================
@@ -766,7 +768,7 @@ class TestHarnessAssembly:
         class MockAdapter:
             def receive(self):
                 return UserRequest(text="")
-            def send(self, response):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, MockAdapter())
@@ -785,7 +787,7 @@ class TestHarnessAssembly:
         class MockAdapter:
             def receive(self):
                 return UserRequest(text="")
-            def send(self, response):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, MockAdapter())
@@ -809,8 +811,9 @@ class TestHarnessAssembly:
                 if call_count[0] == 1:
                     return UserRequest(text="Say 'PONG' only.")
                 return UserRequest(text="")
-            def send(self, response):
-                outputs.append(response.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         container.register(InputAdapter, MockAdapter())
         llm = _make_llm()
@@ -851,8 +854,9 @@ class TestExitSignals:
                     return UserRequest(text=text, metadata=meta)
                 return UserRequest(text="")
 
-            def send(self, response):
-                outputs.append(response.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         container.register(InputAdapter, TestAdapter())
 
@@ -912,7 +916,7 @@ class TestComponentOptionality:
         class ExitAdapter:
             def receive(self):
                 return UserRequest(text="")
-            def send(self, response):
+            def send(self, event):
                 pass
 
         container.register(InputAdapter, ExitAdapter())
@@ -971,7 +975,7 @@ class TestComponentOptionalityWithNormalInput:
                 if calls[0] == 1:
                     return UserRequest(text="hello")
                 return UserRequest(text="")
-            def send(self, r):
+            def send(self, event):
                 pass
 
         c.register(InputAdapter, A())
@@ -1021,8 +1025,9 @@ class TestFullIntegrationRealLLM:
                 if count[0] == 1:
                     return UserRequest(text="Say exactly 'PONG' and nothing else.")
                 return UserRequest(text="")
-            def send(self, r):
-                outputs.append(r.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         container.register(InputAdapter, A())
         llm = MinimalLLMAdapter(
@@ -1054,8 +1059,9 @@ class TestFullIntegrationRealLLM:
                 if count[0] == 1:
                     return UserRequest(text="What is your role? Answer in one sentence.")
                 return UserRequest(text="")
-            def send(self, r):
-                outputs.append(r.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         class G:
             def get_guides(self, ctx):
@@ -1096,8 +1102,9 @@ class TestFullIntegrationRealLLM:
                 if count[0] == 1:
                     return UserRequest(text="Say 'hello' and nothing else.")
                 return UserRequest(text="")
-            def send(self, r):
-                outputs.append(r.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         class S:
             def sense(self, trajectory):
@@ -1146,8 +1153,9 @@ class TestFullIntegrationRealLLM:
                 elif count[0] == 2:
                     return UserRequest(text="What is my name? Answer in one short sentence.")
                 return UserRequest(text="")
-            def send(self, r):
-                outputs.append(r.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         class SimpleAssembler:
             """Assembler that includes history for multi-turn support."""
@@ -1198,8 +1206,9 @@ class TestFullIntegrationRealLLM:
                 if count[0] == 1:
                     return UserRequest(text="Say 'OK' only.")
                 return UserRequest(text="")
-            def send(self, r):
-                outputs.append(r.text)
+            def send(self, event):
+                if isinstance(event, TextEvent):
+                    outputs.append(event.content)
 
         container.register(InputAdapter, A())
         llm = MinimalLLMAdapter(
@@ -1241,7 +1250,7 @@ class TestContextAssemblerIntegration:
                     t = self.inputs[self.idx]; self.idx += 1
                     return UserRequest(text=t)
                 return UserRequest(text="")
-            def send(self, r):
+            def send(self, event):
                 pass
 
         class C:

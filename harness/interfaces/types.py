@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +313,77 @@ class Trajectory:
 
 
 # ---------------------------------------------------------------------------
+# Adapter 事件类型（batch-11）
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ThinkingEvent:
+    """LLM 返回 thinking/reasoning_content 字段时推送。
+
+    仅当 response.thinking 非空时生成此事件。
+    属于后台信息，前端通常仅在 debug 模式下展示。
+    """
+
+    content: str = ""
+
+
+@dataclass
+class ToolCallEvent:
+    """LLM 返回 tool_uses 字段中的一项，工具执行前推送。
+
+    包含完整的工具调用信息（名称、参数），前端可据此
+    展示"正在执行..."等状态。
+    """
+
+    call_id: str = ""
+    tool_name: str = ""
+    arguments: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolResultEvent:
+    """工具执行完成后推送。
+
+    包含执行结果、错误、耗时等完整信息。
+    前端可据此渲染成功/失败状态。
+    """
+
+    call_id: str = ""
+    tool_name: str = ""
+    success: bool = True
+    result: Any = None
+    error: Optional[str] = None
+    duration_ms: float = 0.0
+
+
+@dataclass
+class TextEvent:
+    """LLM 返回 text 字段时推送。
+
+    这是用户最关心的前台内容，对应模型的最终文本回复。
+    流式模式下可通过 is_delta 字段标识增量文本（预留）。
+    """
+
+    content: str = ""
+
+
+@dataclass
+class StopEvent:
+    """内层循环结束，等待下一轮用户输入。
+
+    推送此事件表示本轮 LLM 交互完成，编排器回到外层循环
+    （等待 InputAdapter.receive()）。
+    """
+
+    stop_reason: str = "end_turn"
+
+
+# Union 类型别名，用于 InputAdapter.send() 签名
+AdapterEvent = Union[ThinkingEvent, ToolCallEvent, ToolResultEvent, TextEvent, StopEvent]
+
+
+# ---------------------------------------------------------------------------
 # 导出列表
 # ---------------------------------------------------------------------------
 
@@ -334,4 +405,11 @@ __all__ = [
     "Response",
     "AssemblyContext",
     "Trajectory",
+    # batch-11: Adapter event types
+    "ThinkingEvent",
+    "ToolCallEvent",
+    "ToolResultEvent",
+    "TextEvent",
+    "StopEvent",
+    "AdapterEvent",
 ]

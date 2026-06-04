@@ -1,6 +1,8 @@
 # 03 — 项目代码目录边界
 
 > 定义框架源码的文件/目录结构。所有批次产出的代码必须遵守此布局，避免跨批次文件冲突。
+>
+> **版本: 1.0**
 
 ---
 
@@ -10,22 +12,28 @@
 harness_agent/
 ├── sdd/                          # SDD 规格文件（当前目录）
 ├── harness/                      # 框架源码
-│   ├── core/                     # 内核：DI 容器、生命周期编排、异常、数据类型
-│   ├── interfaces/               # 组件接口类型（Protocol + 正式大包对象，batch-02 完成）
-│   ├── adapters/                 # 外部系统适配器（LLM API 等）
-│   ├── config/                   # 配置模块（TOML 加载、.env 模板）
+│   ├── core/                     # 内核：DI 容器、生命周期编排、异常
+│   ├── interfaces/               # 组件接口类型（Protocol + 大包对象）
+│   ├── adapters/                 # 外部系统适配器（LLM API）
+│   ├── config/                   # 配置模块：TOML 加载 + YAML 装配
+│   │   ├── loader.py            # TOML 配置加载器（ConfigLoader）
+│   │   └── yaml_assembler.py    # YAML 装配加载器（YamlAssembler）
 │   ├── messaging/                # 消息构造工具
-│   ├── components/               # 各组件实现（后续批次）
-│   ├── hooks/                    # Hook 系统（后续批次）
-│   └── di.py                     # 装配入口
+│   ├── components/               # 各组件默认实现
+│   ├── hooks/                    # Hook 系统
+│   └── di.py                     # 装配入口（Harness 类）
 ├── profiles/                     # 领域模板
-│   ├── coding-assistant/
-│   ├── travel-assistant/
-│   └── research-assistant/
+│   └── coding-assistant/
+│       ├── profile.toml          # 模板元数据
+│       ├── harness.yaml          # DI 装配声明
+│       ├── AGENTS.md             # Agent 指导
+│       └── README.md
 ├── tests/                        # 测试
+│   ├── test_yaml_assembler.py    # YamlAssembler 单元测试
+│   └── test_e2e_assembly.py      # 端到端装配集成测试
 ├── examples/                     # 示例项目
-├── main.py                       # 框架入口（harness run / harness init）
-├── ARCHITECTURE.md               # 完整架构文档（人类读）
+├── main.py                       # CLI 入口（harness init / run）
+├── ARCHITECTURE.md               # 完整架构文档
 └── README.md                     # 项目简介
 ```
 
@@ -149,8 +157,31 @@ harness/hooks/
 **放什么：**
 - DI 容器类 `DIContainer`（register / resolve — 预构造实例注册模式）
 - `Harness.from_container()` 工厂方法（从容器解析组件并启动生命周期编排）
+- `Harness.register_hook()` — Hook 注册便捷方法
 
 **模块边界：** 这是装配层文件。可以 import `core/`、`interfaces/`、`components/`、`hooks/` 中的所有模块。
+
+---
+
+### `harness/config/`
+
+**放什么：**
+- `loader.py` — TOML 配置文件加载器（`ConfigLoader`），读取 `profile.toml`
+- `yaml_assembler.py` — YAML 装配加载器（`YamlAssembler`），读取 `harness.yaml` 并构建 DI 容器
+
+**模块边界：** `yaml_assembler.py` 仅导入 `interfaces/` 和 `core/container.py`（类型级别），
+不导入 `components/` 中的具体实现（通过动态 import）。
+
+---
+
+### `main.py`
+
+**放什么：**
+- CLI 入口：`harness init`（从领域模板生成新项目）+ `harness run`（按装配配置启动 Agent）
+- 降级装配逻辑（无 YAML 配置时使用全默认组件）
+
+**模块边界：** 顶层入口文件，可以 import 所有模块。`harness run` 命令优先使用 `YamlAssembler`，
+配置文件不存在时降级为 Python API 装配。
 
 ---
 
@@ -175,26 +206,29 @@ tests/
 ├── test_tool_router.py
 ├── test_hooks.py
 ├── test_di.py
-└── test_integration.py          # 端到端集成测试
+├── test_yaml_assembler.py          # YamlAssembler 单元测试 (NEW batch-10)
+├── test_e2e_assembly.py            # 端到端装配集成测试 (NEW batch-10)
+└── test_integration.py             # 端到端集成测试
 ```
 
 ---
 
 ### `profiles/`
 
-每个领域模板是一个独立文件夹，包含预设的组件装配方案和默认实现骨架：
+每个领域模板是一个独立文件夹，包含预设的组件装配方案和默认实现骨架。
+
+**两种配置文件的职责分工：**
+- `profile.toml` — 模板元数据（name, description, template, version, modules），由 `ConfigLoader` 读取
+- `harness.yaml` — DI 装配声明（组件、Hook、LLM 配置），由 `YamlAssembler` 读取
+- 两者共存于 profile 目录下，各司其职
 
 ```
 profiles/
 ├── coding-assistant/
-│   ├── profile.toml
-│   ├── README.md
-│   ├── input/
-│   ├── guides/
-│   ├── mcp/
-│   ├── sensors/
-│   ├── context/
-│   └── examples/
+│   ├── profile.toml           # 模板元数据（ConfigLoader）
+│   ├── harness.yaml           # DI 装配声明（YamlAssembler）
+│   ├── AGENTS.md              # Agent 指导文件
+│   └── README.md              # 使用说明
 ├── travel-assistant/
 │   └── ...
 └── research-assistant/

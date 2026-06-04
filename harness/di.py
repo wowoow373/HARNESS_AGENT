@@ -9,6 +9,7 @@ from typing import Callable, Optional
 from .core.container import DIContainer
 from .core.exceptions import ComponentNotRegisteredError
 from .core.orchestrator import InputAdapter, LifecycleOrchestrator
+from .interfaces.hook import Hook
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,18 @@ class Harness:
             )
         orchestrator = LifecycleOrchestrator(container, call_llm=call_llm)
         return Harness(orchestrator)
+
+    def register_hook(self, event: str, hook: Hook) -> None:
+        """注册一个生命周期 Hook。
+
+        代理到内部 LifecycleOrchestrator.register_hook()。
+        供 YamlAssembler 在装配后注册 YAML 中声明的 Hook。
+
+        Args:
+            event: 生命周期事件名（建议使用 harness.hooks.events 中的常量）。
+            hook: Hook 函数，签名 ``(context: HookContext) -> None``。
+        """
+        self._orchestrator.register_hook(event, hook)
 
     def run(self) -> None:
         """启动完整的会话生命周期。
