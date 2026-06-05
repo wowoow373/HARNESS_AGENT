@@ -21,3 +21,4 @@ venv/
 # Environment
 .env
 .env.local
+memory/episodic/session_*.md
