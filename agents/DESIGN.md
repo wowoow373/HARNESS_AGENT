@@ -1,8 +1,10 @@
 # Harness 领域 Agent 前置分析文档
 
-> 本文档记录 `showcase/agents` 分支上计划实现的两个领域 Agent 的设计意图、组件替换策略和技术方案分析。不含具体代码实现。
+> 本文档记录 `showcase/agents` 分支上领域 Agent 的设计意图、组件替换策略和技术方案分析。
 >
 > **版本**: v1.0 | **分支**: `showcase/agents`
+>
+> **状态**: `chat-web` ✅ 已实现 | `trajectory-analyst` 🔜 计划中
 
 ---
 
@@ -68,6 +70,12 @@ FastAPI 服务器
   │
   └── 静态文件 (static/index.html)
 ```
+
+**前端界面：**
+
+![Chat-Web 界面截图](chat-web/screenshot.png)
+
+*彩色消息气泡、工具调用实时动画、自定义 emoji 渲染*
 
 **事件流设计：**
 ```
@@ -212,7 +220,7 @@ timestamp: 1780582800.623671
 
 ---
 
-## 4. 目录规划
+## 4. 目录规划（实际结构）
 
 ```
 agents/
@@ -221,17 +229,35 @@ agents/
 │   ├── harness.yaml
 │   └── README.md
 │
-├── chat-web/                   # 待实现（ToC）
+├── chat-web/                   # ✅ 已实现（ToC）
 │   ├── AGENTS.md               # 聊天助手身份定义
-│   ├── harness.yaml            # 装配 WebSocketAdapter + 消费级工具
+│   ├── README.md               # 项目文档（含截图）
+│   ├── screenshot.png          # 界面截图
+│   ├── server.py               # FastAPI 入口 + per-connection Harness 生命周期
 │   ├── adapter/
-│   │   └── websocket_adapter.py
-│   ├── server.py               # FastAPI 入口
+│   │   ├── __init__.py
+│   │   └── websocket_adapter.py    # WebSocket InputAdapter 实现
 │   ├── static/
-│   │   └── index.html          # 聊天前端
-│   └── README.md
+│   │   ├── index.html          # 聊天前端（vanilla JS，~200 行）
+│   │   └── emojis/             # 自定义表情图片（5 个）
+│   │       ├── manifest.json
+│   │       ├── laugh.jpg
+│   │       ├── cool.jpg
+│   │       ├── happy.jpg
+│   │       ├── cry.jpg
+│   │       └── cute.gif
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── web_search.py       # 模拟网络搜索
+│   │   └── weather.py          # 模拟天气查询
+│   └── tests/                  # 测试套件（4 模块，1444 行）
+│       ├── __init__.py
+│       ├── test_websocket_adapter.py
+│       ├── test_tools.py
+│       ├── test_emojis.py
+│       └── test_e2e.py
 │
-└── trajectory-analyst/         # 待实现（ToB Meta）
+└── trajectory-analyst/         # 🔜 计划中（ToB Meta）
     ├── AGENTS.md               # 轨迹分析师身份定义
     ├── harness.yaml            # 装配轨迹分析工具集
     ├── tools/
@@ -246,16 +272,25 @@ agents/
 
 ---
 
-## 5. 开发顺序建议
+## 5. 开发顺序
+
+### ✅ Phase 1: chat-web（已完成）
 
 ```
-Phase 1: chat-web
-  ├── 实现 WebSocketAdapter（InputAdapter 协议）
-  ├── 实现 FastAPI 服务器 + WebSocket 路由
-  ├── 编写前端 index.html
-  ├── 编写 chat-web/AGENTS.md
-  └── 编写 harness.yaml 装配声明
+Phase 1: chat-web ✅
+  ├── ✅ 实现 WebSocketAdapter（InputAdapter 协议，线程安全队列桥接）
+  ├── ✅ 实现 FastAPI 服务器 + WebSocket 路由（per-connection Harness 生命周期）
+  ├── ✅ 编写前端 index.html（vanilla JS，彩色气泡 + 工具动画 + emoji 渲染）
+  ├── ✅ 编写 chat-web/AGENTS.md（聊天助手身份 + 5 个自定义 emoji 约束）
+  ├── ✅ 实现 web_search / weather 消费级工具
+  ├── ✅ 实现 before_assemble Hook（动态注入 emoji 严格规则）
+  ├── ✅ 编写测试套件（4 模块，1444 行：adapter / tools / emojis / e2e）
+  └── ✅ 捕获界面截图 screenshot.png
+```
 
+### 🔜 Phase 2: trajectory-analyst（计划中）
+
+```
 Phase 2: trajectory-analyst
   ├── 实现轨迹读取工具（解析 YAML+JSON 混合格式）
   ├── 实现统计分析工具
@@ -263,13 +298,19 @@ Phase 2: trajectory-analyst
   ├── 实现报告生成工具
   ├── 编写 trajectory-analyst/AGENTS.md
   └── 编写 harness.yaml 装配声明
+```
 
+### 🔜 Phase 3: 收尾（部分完成）
+
+```
 Phase 3: 收尾
-  ├── 重写根 README.md（从框架文档 → 领域 Agent showcase）
-  ├── 添加 agents/README.md（"如何创建你的领域 Agent" 教程）
-  └── 补充集成测试
+  ├── ✅ 更新 agents/chat-web/README.md（添加截图、目录、测试说明）
+  ├── ✅ 更新 agents/DESIGN.md（标注实现状态）
+  ├── 🔜 更新根 README.md（添加 Agent showcase 导航）
+  ├── 🔜 添加 agents/README.md（"如何创建你的领域 Agent" 教程）
+  └── 🔜 trajectory-analyst 实现
 ```
 
 ---
 
-> **注意**: 本文档为前置分析，不含具体代码实现。实现代码位于各 Agent 子目录中。
+> **注意**: `chat-web` 完整实现代码位于 `agents/chat-web/` 目录中。本文档为设计分析，实现细节参见各组件源码及 README。

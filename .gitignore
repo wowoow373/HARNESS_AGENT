@@ -21,4 +21,7 @@ venv/
 # Environment
 .env
 .env.local
+
+# Runtime session data
 memory/episodic/session_*.md
+agents/chat-web/memory/

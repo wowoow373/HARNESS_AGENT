@@ -99,7 +99,7 @@ Harness.from_container(container, call_llm=MinimalLLMAdapter()).run()
 | [CORE_DEVELOPER_GUIDE.md](CORE_DEVELOPER_GUIDE.md) | 开发者 | 数据类型速查、LLM 集成、消息转换、测试 |
 | [sdd/](sdd/) | 贡献者 | 软件设计文档 |
 | [examples/](examples/) | 开发者 | 可运行示例 |
-| [profiles/](profiles/) | 所有人 | 领域模板 |
+| [agents/](agents/) | 所有人 | 领域 Agent 展示（chat-web、trajectory-analyst） |
 
 ### 组件文档
 
@@ -131,6 +131,15 @@ pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 598 tests
 - ✅ Batch-04~06：GuideProvider + ContextAssembler + Tool/MCP
 - ✅ Batch-07~09：Sensor + InputAdapter + Hooks
 - ✅ Batch-10~11：DI 装配 + 事件驱动适配器
+
+**领域 Agent Showcase（showcase/agents 分支）** 🌐
+
+- ✅ **chat-web** — WebSocket 网页聊天助手（[agents/chat-web/](agents/chat-web/)）
+  - `InputAdapter` 替换：CliAdapter → WebSocketAdapter
+  - 自定义消费级工具：web_search、weather
+  - 自定义 emoji 渲染系统 + before_assemble Hook 约束
+  - 完整测试套件（4 模块，1444 行）
+- 🔜 **trajectory-analyst** — 轨迹分析元 Agent（计划中）
 
 **计划中（v2.0）** 🔨
 
