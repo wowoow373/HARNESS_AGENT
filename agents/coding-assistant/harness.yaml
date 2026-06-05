@@ -1,0 +1,85 @@
+# harness.yaml — Harness Agent 装配声明
+# 此文件描述 DI 容器的组件注册和框架配置。
+#
+# 用法:
+#   python main.py run --config harness.yaml
+#
+# 自定义:
+#   - 修改 implementation 字段以替换默认组件
+#   - 修改 params 字段以调整组件行为
+#   - 在 hooks 段添加自定义生命周期 Hook
+#   - 切换 llm.provider 以使用不同的 LLM 服务
+
+harness:
+  version: "1.0"
+  profile: coding-assistant
+
+  # ── 组件注册 ──────────────────────────────────────────
+  components:
+    # InputAdapter（必需）
+    # 替换方式: 实现 harness.interfaces.InputAdapter 协议
+    - interface: InputAdapter
+      implementation: harness.components.input_adapter.CliAdapter
+
+    # MemoryBackend（可选）
+    # 替换方式: 实现 harness.interfaces.MemoryBackend 协议
+    - interface: MemoryBackend
+      implementation: harness.components.memory_backend.MdMemory
+      params:
+        path: ./memory
+
+    # GuideProvider（可选）
+    # 替换方式: 实现 harness.interfaces.GuideProvider 协议
+    - interface: GuideProvider
+      implementation: harness.components.guide_provider.FileGuideProvider
+      params:
+        paths:
+          - AGENTS.md
+
+    # ContextAssembler（可选，依赖 MemoryBackend）
+    # 替换方式: 实现 harness.interfaces.ContextAssembler 协议
+    - interface: ContextAssembler
+      implementation: harness.components.context_assembler.SimpleAssembler
+      params:
+        max_history: 50
+      inject:
+        memory: MemoryBackend
+
+    # Sensor（可选，依赖 MemoryBackend）
+    # 替换方式: 实现 harness.interfaces.Sensor 协议
+    - interface: Sensor
+      implementation: harness.components.sensor.LoggingSensor
+      inject:
+        memory: MemoryBackend
+
+    # SystemToolProvider（可选）
+    # 替换方式: 实现 harness.interfaces.SystemToolProvider 协议，
+    #          或使用 DefaultSystemToolProvider 配合 @inline_tool 扩展
+    - interface: SystemToolProvider
+      implementation: harness.components.tool.DefaultSystemToolProvider
+
+    # MCPAdapter（可选 — 取消注释以下块以启用 MCP 功能）
+    # - interface: MCPAdapter
+    #   implementation: harness.components.mcp_manager.DefaultMCPAdapter
+    #   params:
+    #     mcp_configs:
+    #       - name: filesystem
+    #         command: npx
+    #         args:
+    #           - -y
+    #           - "@anthropic-ai/mcp-server-filesystem"
+    #           - /path/to/allowed/dir
+    #         transport: stdio
+    #     transforms: {}
+
+  # ── Hook 注册 ──
+  # 在此添加自定义 Hook 函数（格式: module.path.function_name）
+  hooks: []
+
+  # ── LLM 配置 ──
+  # base_url、api_key、model 默认从环境变量读取，YAML 可覆盖
+  llm:
+    provider: openai
+    # model: gpt-4o
+    # base_url: https://api.openai.com/v1
+    # api_key: ${OPENAI_API_KEY}
