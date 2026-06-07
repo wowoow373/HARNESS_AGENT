@@ -22,3 +22,6 @@ venv/
 .env
 .env.local
 memory/episodic/session_*.md
+
+# Agent runtime sessions
+agents/
