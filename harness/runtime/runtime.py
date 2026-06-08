@@ -1,0 +1,125 @@
+"""Runtime — 顶层入口。
+
+创建 Kernel + 启动事件循环 + 注册信号处理。
+
+用法:
+    # Mode A（交互式单 agent）
+    console = CliConsole()
+    root_harness = Harness.from_container(container, call_llm=my_llm)
+    Runtime(console).run(root_harness)
+
+    # Mode B（Batch 3 才支持）
+    # Runtime(console).run_from_script("workflow.py")
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import signal
+from typing import TYPE_CHECKING
+
+from .signals import create_sigint_handler
+from .types import RuntimeStarted, RuntimeStopped
+
+if TYPE_CHECKING:
+    from ..interfaces.system_console import SystemConsole
+
+logger = logging.getLogger(__name__)
+
+
+class Runtime:
+    """Runtime 顶层入口。
+
+    负责创建 Kernel、启动事件循环、注册信号处理。
+    Mode A: Runtime(console).run(harness) — 单 agent 交互式对话。
+    Mode B: Runtime(console).run_from_script(path) — Batch 3。
+    """
+
+    def __init__(self, console: 'SystemConsole'):
+        """初始化 Runtime。
+
+        Args:
+            console: SystemConsole 实现（如 CliConsole）。
+        """
+        self._console = console
+        self._kernel = None
+        self._sigint_count: int = 0
+
+    # ------------------------------------------------------------------
+    # 公开入口
+    # ------------------------------------------------------------------
+
+    def run(self, harness) -> None:
+        """同步入口 — 启动整个 Runtime（Mode A）。
+
+        Args:
+            harness: 装配好的 Harness 实例。其 container 属性
+                     用于构造 AsyncLifecycleOrchestrator。
+        """
+        try:
+            asyncio.run(self._run_async(harness))
+        except KeyboardInterrupt:
+            # SIGINT 已在 _on_sigint 中处理
+            pass
+
+    # ------------------------------------------------------------------
+    # 内部
+    # ------------------------------------------------------------------
+
+    async def _run_async(self, harness) -> None:
+        """异步主流程。"""
+        from .kernel import Kernel
+
+        # 1. sync→async LLM bridge（在 Runtime 入口层，不侵入 orchestrator）
+        call_llm = getattr(harness, 'call_llm', None)
+        if call_llm and not asyncio.iscoroutinefunction(call_llm):
+            original = call_llm
+
+            async def _async_wrapper(msgs, tools):
+                return await asyncio.to_thread(original, msgs, tools)
+
+            call_llm = _async_wrapper
+            logger.info("Wrapped sync call_llm → async via asyncio.to_thread")
+
+        # 2. 创建 Kernel
+        self._kernel = Kernel(self._console)
+
+        # 3. spawn root agent
+        self._kernel.spawn_root(harness, call_llm=call_llm)
+
+        # 4. 启动三个协程
+        task_root = self._kernel._tasks["root"]
+        task_sys = asyncio.create_task(
+            self._kernel._handle_system_input()
+        )
+        task_mon = asyncio.create_task(
+            self._kernel._monitor_quiescence()
+        )
+
+        # 5. 注册信号处理
+        handler = create_sigint_handler(self)
+        loop = asyncio.get_running_loop()
+        try:
+            loop.add_signal_handler(signal.SIGINT, handler)
+            logger.debug("SIGINT handler registered")
+        except NotImplementedError:
+            logger.debug("SIGINT handler not available on this platform")
+
+        # 6. 推送启动事件
+        await self._console.send(RuntimeStarted())
+
+        # 7. 等待全部完成
+        try:
+            await asyncio.gather(
+                task_root, task_sys, task_mon,
+                return_exceptions=True,
+            )
+        finally:
+            try:
+                loop.remove_signal_handler(signal.SIGINT)
+            except (NotImplementedError, RuntimeError):
+                pass
+
+        # 8. 推送停止事件
+        await self._console.send(RuntimeStopped())
