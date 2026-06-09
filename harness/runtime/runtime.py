@@ -100,13 +100,13 @@ class Runtime:
         # 3. spawn root agent
         self._kernel.spawn_root(harness, call_llm=call_llm)
 
-        # 4. 启动三个协程
+        # 4. 启动协程
+        #    Mode A 不启动 _monitor_quiescence —— root agent 在 receive()
+        #    中等待用户输入时处于 idle 状态，静默检测会误判为"工作完成"而
+        #    强制终止。Mode A 由用户 /exit 或 SIGINT 控制退出。
         task_root = self._kernel._tasks["root"]
         task_sys = asyncio.create_task(
             self._kernel._handle_system_input()
-        )
-        task_mon = asyncio.create_task(
-            self._kernel._monitor_quiescence()
         )
 
         # 5. 注册信号处理
@@ -121,10 +121,10 @@ class Runtime:
         # 6. 推送启动事件
         await self._console.send(RuntimeStarted())
 
-        # 7. 等待全部完成
+        # 7. 等待完成（root + system input）
         try:
             await asyncio.gather(
-                task_root, task_sys, task_mon,
+                task_root, task_sys,
                 return_exceptions=True,
             )
         finally:
