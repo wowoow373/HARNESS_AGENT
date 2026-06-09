@@ -160,12 +160,7 @@ class Runtime:
             self._kernel._handle_system_input()
         )
 
-        # 4. 启动静默检测
-        task_mon = asyncio.create_task(
-            self._kernel._monitor_quiescence()
-        )
-
-        # 5. 注册信号处理
+        # 4. 注册信号处理
         handler = create_sigint_handler(self)
         loop = asyncio.get_running_loop()
         try:
@@ -174,14 +169,16 @@ class Runtime:
         except NotImplementedError:
             logger.debug("SIGINT handler not available on this platform")
 
-        # 6. 推送启动事件
+        # 5. 推送启动事件
         await self._console.send(RuntimeStarted())
 
-        # 7. 等待 agent tasks + 静默检测完成
+        # 6. 等待所有 agent tasks 完成
+        #    Mode B 不启用静默检测：workflow 结束依赖 agent 调用
+        #    finish_agent + 级联终止。所有 agent FINISHED 后 gather 返回。
         try:
             agent_tasks = list(self._kernel._tasks.values())
             await asyncio.gather(
-                *agent_tasks, task_mon,
+                *agent_tasks,
                 return_exceptions=True,
             )
         finally:

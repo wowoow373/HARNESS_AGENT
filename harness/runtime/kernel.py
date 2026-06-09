@@ -308,6 +308,9 @@ class Kernel:
                 harness = blueprint["factory"]()
 
                 # 5b. Determine mode
+                # 设计约定：声明了 subscribe 的 agent 均为 continuous，
+                # 无论 subscriber 还是 publisher（见顶层设计 Section 6.3）。
+                # Workflow 由静默检测或 finish_agent / cascade 结束。
                 has_subscriptions = any(
                     sub.subscriber == name or sub.publisher == name
                     for sub in decorators._subscription_registry
