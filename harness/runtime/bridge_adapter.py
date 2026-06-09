@@ -63,23 +63,28 @@ class KernelBridgeAdapter:
 
         转换规则：
         - UserRequest → 原样返回
-        - InternalMessage → UserRequest(text=msg.content, metadata={from: msg.from_pid, ...})
+        - InternalMessage(TextEvent) → UserRequest(text=content, metadata={from: from_pid})
+        - InternalMessage(StopEvent) → 跳过（订阅者不需要空消息，TextEvent 已送达）
         - __EXIT_SENTINEL__ → UserRequest(text="", metadata={"exit": True})
         """
-        item = await self._kernel.input_queues[self._pid].get()
+        while True:
+            item = await self._kernel.input_queues[self._pid].get()
 
-        if item is __EXIT_SENTINEL__:
-            return UserRequest(text="", metadata={"exit": True})
-        elif isinstance(item, InternalMessage):
-            return UserRequest(
-                text=item.content,
-                metadata={**item.metadata, "from": item.from_pid},
-            )
-        elif isinstance(item, UserRequest):
-            return item
-        else:
-            # 防御：未知类型视为纯文本
-            return UserRequest(text=str(item))
+            if item is __EXIT_SENTINEL__:
+                return UserRequest(text="", metadata={"exit": True})
+            elif isinstance(item, InternalMessage):
+                # StopEvent 标记不推给 LLM——订阅者已在上一轮收到了 TextEvent
+                if item.metadata.get("stop"):
+                    continue
+                return UserRequest(
+                    text=item.content,
+                    metadata={**item.metadata, "from": item.from_pid},
+                )
+            elif isinstance(item, UserRequest):
+                return item
+            else:
+                # 防御：未知类型视为纯文本
+                return UserRequest(text=str(item))
 
     async def send(self, event, target=None):
         """推送事件。

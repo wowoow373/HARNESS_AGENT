@@ -30,6 +30,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_adapter(container, pid: str, kernel: 'Kernel', runtime: 'AgentRuntime'):
+    """Resolve AsyncInputAdapter from DI container, fallback to KBA.
+
+    User can register a custom AsyncInputAdapter in their workflow script's
+    @agent assembly function — e.g. a batch-window adapter for slow readers.
+    If none registered, the default KernelBridgeAdapter is used.
+    """
+    from ..interfaces.async_input_adapter import AsyncInputAdapter
+    from .bridge_adapter import KernelBridgeAdapter
+
+    try:
+        return container.resolve(AsyncInputAdapter)
+    except Exception:
+        return KernelBridgeAdapter(pid=pid, kernel=kernel, runtime=runtime)
+
+
 def make_async_llm(sync_call_llm):
     """Wrap a synchronous call_llm as an async callable via asyncio.to_thread."""
     async def _wrapper(msgs, tools, _orig=sync_call_llm):
@@ -109,9 +125,9 @@ class Kernel:
             parent=None,
         )
 
-        # 2. 挂载 KernelBridgeAdapter
-        runtime.adapter = KernelBridgeAdapter(
-            pid=pid, kernel=self, runtime=runtime
+        # 2. 挂载 adapter — 优先从 DI 容器 resolve，fallback 到 KBA
+        runtime.adapter = _resolve_adapter(
+            harness.container, pid=pid, kernel=self, runtime=runtime
         )
 
         # 2a. Inject Runtime tools
@@ -325,9 +341,9 @@ class Kernel:
                     parent=parent,
                 )
 
-                # 5d. Mount KernelBridgeAdapter
-                runtime.adapter = KernelBridgeAdapter(
-                    pid=name, kernel=self, runtime=runtime
+                # 5d. Mount adapter — DI resolve or fallback to KBA
+                runtime.adapter = _resolve_adapter(
+                    harness.container, pid=name, kernel=self, runtime=runtime
                 )
 
                 # 5e. Extract and bridge call_llm
@@ -731,7 +747,10 @@ class Kernel:
                 else:
                     self.send_input(
                         command.pid,
-                        UserRequest(text=command.text),
+                        UserRequest(
+                            text=command.text,
+                            metadata={"from": "user", "type": "talk"},
+                        ),
                     )
 
             # ── CommandError (由 CliConsole 解析失败产生) ──
