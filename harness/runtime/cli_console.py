@@ -15,6 +15,7 @@ from .types import (
     AgentOutput,
     AgentSpawned,
     AgentStateChanged,
+    AgentsListed,
     CommandTalk,
     CommandKill,
     CommandListAgents,
@@ -24,6 +25,7 @@ from .types import (
     CommandError,
     RuntimeStarted,
     RuntimeStopped,
+    SystemMessage,
     WorkflowFinished,
     SystemCommand,
     SystemEvent,
@@ -205,3 +207,35 @@ class CliConsole:
                     if len(output) > 200:
                         truncated += "..."
                     print(f"    → {truncated}")
+
+        elif isinstance(event, AgentsListed):
+            if not event.agents:
+                print("[系统] 没有运行中的 agent")
+            else:
+                print(f"[系统] Agents ({len(event.agents)}):")
+                print(
+                    f"  {'PID':12} {'STATE':13} {'MODE':11} "
+                    f"{'ROUNDS':7} {'PARENT'}"
+                )
+                print(
+                    f"  {'-'*12} {'-'*13} {'-'*11} "
+                    f"{'-'*7} {'-'*12}"
+                )
+                for pid, info in event.agents.items():
+                    parent = info.get("parent") or "-"
+                    state = info.get("state", "?")
+                    mode = info.get("mode", "?")
+                    rounds = str(info.get("rounds", "?"))
+                    error_mark = " ⚡" if info.get("error") else ""
+                    print(
+                        f"  {pid:12} {state:13} {mode:11} "
+                        f"{rounds:7} {parent:12}{error_mark}"
+                    )
+
+        elif isinstance(event, CommandError):
+            print(f"[系统] 错误: {event.error}")
+            if event.command:
+                print(f"  命令: {event.command}")
+
+        elif isinstance(event, SystemMessage):
+            print(f"[系统] {event.message}")

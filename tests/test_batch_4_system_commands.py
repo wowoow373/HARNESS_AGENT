@@ -241,3 +241,89 @@ async def test_receive_unknown_command_errors():
     result = await _receive_lines(console, ["/unknown xyz\n"])
     assert isinstance(result, CommandError)
     assert "未知命令" in result.error
+
+
+# ============================================================================
+# CliConsole.send() — 5 tests
+# ============================================================================
+
+
+@async_test
+async def test_send_agents_listed_multiple():
+    """AgentsListed with multiple agents → formatted table"""
+    from harness.runtime.cli_console import CliConsole
+    console = CliConsole(mode="mode_a")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        await console.send(AgentsListed(agents={
+            "root": {"state": "running", "mode": "continuous",
+                     "parent": None, "rounds": 5, "error": None},
+            "collector": {"state": "finished", "mode": "oneshot",
+                          "parent": "root", "rounds": 1, "error": None},
+        }))
+    output = buf.getvalue()
+    assert "root" in output
+    assert "running" in output
+    assert "continuous" in output
+    assert "collector" in output
+    assert "finished" in output
+    assert "oneshot" in output
+
+
+@async_test
+async def test_send_agents_listed_empty():
+    """AgentsListed empty → 'no running agents' message"""
+    from harness.runtime.cli_console import CliConsole
+    console = CliConsole(mode="mode_a")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        await console.send(AgentsListed(agents={}))
+    output = buf.getvalue()
+    assert "没有运行中的 agent" in output
+
+
+@async_test
+async def test_send_command_error_with_command():
+    """CommandError with command text → shows error + command"""
+    from harness.runtime.cli_console import CliConsole
+    console = CliConsole(mode="mode_a")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        await console.send(CommandError(
+            command="/kill ghost", error="pid 'ghost' 不存在"
+        ))
+    output = buf.getvalue()
+    assert "错误" in output
+    assert "/kill ghost" in output
+    assert "ghost" in output
+
+
+@async_test
+async def test_send_command_error_no_command():
+    """CommandError without command text → shows error only"""
+    from harness.runtime.cli_console import CliConsole
+    console = CliConsole(mode="mode_a")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        await console.send(CommandError(
+            command="", error="按 Enter 退出"
+        ))
+    output = buf.getvalue()
+    assert "错误" in output
+    assert "按 Enter 退出" in output
+
+
+@async_test
+async def test_send_system_message():
+    """SystemMessage → informational message without 'error' prefix"""
+    from harness.runtime.cli_console import CliConsole
+    console = CliConsole(mode="mode_a")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        await console.send(SystemMessage(
+            message="所有 agent 已完成。按 Enter 退出..."
+        ))
+    output = buf.getvalue()
+    assert "[系统]" in output
+    assert "所有 agent 已完成" in output
+    assert "错误" not in output  # SystemMessage 不应显示"错误"
