@@ -71,6 +71,16 @@ class Harness:
         orchestrator = LifecycleOrchestrator(container, call_llm=call_llm)
         return Harness(orchestrator)
 
+    @property
+    def container(self) -> 'DIContainer':
+        """Passthrough to internal LifecycleOrchestrator's DI container."""
+        return self._orchestrator.container
+
+    @property
+    def call_llm(self):
+        """Passthrough to internal LifecycleOrchestrator's call_llm."""
+        return self._orchestrator.call_llm
+
     def register_hook(self, event: str, hook: Hook) -> None:
         """注册一个生命周期 Hook。
 
