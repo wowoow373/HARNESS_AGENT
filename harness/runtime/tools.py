@@ -61,7 +61,9 @@ class CompositeSystemToolProvider:
         if self._user:
             try:
                 return self._user.execute(name, args)
-            except KeyError:
+            except Exception:
+                # User provider doesn't have this tool, or raised
+                # for other reasons — fall through to unified KeyError.
                 pass
 
         raise KeyError(

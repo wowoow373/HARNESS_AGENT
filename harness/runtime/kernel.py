@@ -30,6 +30,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _make_async_llm(sync_call_llm):
+    """Wrap a synchronous call_llm as an async callable via asyncio.to_thread."""
+    async def _wrapper(msgs, tools, _orig=sync_call_llm):
+        return await asyncio.to_thread(_orig, msgs, tools)
+    return _wrapper
+
+
 class Kernel:
     """全局单例。进程表 + 消息路由 + 调度。
 
@@ -314,16 +321,9 @@ class Kernel:
                 )
 
                 # 5e. Extract and bridge call_llm
-                import asyncio as _asyncio
                 call_llm = getattr(harness, 'call_llm', None)
-                if call_llm and not _asyncio.iscoroutinefunction(call_llm):
-                    original = call_llm
-
-                    async def _async_wrapper(msgs, tools,
-                                             _orig=original):
-                        return await _asyncio.to_thread(_orig, msgs, tools)
-
-                    call_llm = _async_wrapper
+                if call_llm and not asyncio.iscoroutinefunction(call_llm):
+                    call_llm = _make_async_llm(call_llm)
 
                 # 5f. Inject Runtime tools
                 self._inject_runtime_tools(harness.container, pid=name)
