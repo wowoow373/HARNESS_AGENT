@@ -62,10 +62,59 @@ class CommandTalk:
     text: str
 
 
-# Batch 1 仅 CommandTalk 一个命令类型。
-# Batch 4 追加: CommandKill, CommandListAgents, CommandEndWorkflow,
-# CommandExit, CommandTalkDirect
-SystemCommand = CommandTalk
+# ── Batch 4 新增 SystemCommand 类型 ──
+
+
+@dataclass
+class CommandKill:
+    """/kill <pid> — 终止指定 agent。"""
+    pid: str
+
+
+@dataclass
+class CommandListAgents:
+    """/agents — 列出所有 agent 状态。"""
+    pass
+
+
+@dataclass
+class CommandEndWorkflow:
+    """/end <flag> — 终止整个 workflow。"""
+    flag: str
+
+
+@dataclass
+class CommandExit:
+    """/exit — 优雅退出 Runtime。"""
+    pass
+
+
+@dataclass
+class CommandTalkDirect:
+    """/talk <pid> <text> — 定向向指定 agent 发送消息（Mode B）。"""
+    pid: str
+    text: str
+
+
+@dataclass
+class CommandError:
+    """系统命令执行失败。
+
+    双重身份：SystemCommand（CliConsole 解析失败时产生）和
+    SystemEvent（Kernel 执行失败时产生）。
+    """
+    command: str = ""
+    error: str = ""
+
+
+# ── SystemCommand union 更新 ──
+# 注意：CommandError 也在 union 中——CliConsole.receive() 解析失败时
+# 返回 CommandError 作为"命令"，Kernel 收到后透传给 console.send() 显示。
+SystemCommand = (
+    CommandTalk | CommandKill | CommandListAgents
+    | CommandEndWorkflow | CommandExit | CommandTalkDirect
+    | CommandError
+)
 
 
 # ── SystemEvent（Batch 1 最小版本）─────────────────────────
@@ -154,9 +203,30 @@ class WorkflowFinished:
     agents: list = field(default_factory=list)
 
 
+# ── Batch 4 新增 SystemEvent 类型 ──
+
+
+@dataclass
+class AgentsListed:
+    """/agents 响应 — agent 状态快照。"""
+    agents: dict = field(default_factory=dict)
+
+
+@dataclass
+class SystemMessage:
+    """系统信息提示（非错误）。
+
+    区别于 CommandError：不应以"[系统] 错误:" 前缀显示。
+    """
+    message: str = ""
+
+
 # Union 类型别名，用于 SystemConsole.send() 签名
 SystemEvent = (
     AgentSpawned | AgentStateChanged | AgentFinished
     | AgentOutput | RuntimeStarted | RuntimeStopped
     | WorkflowFinished  # Batch 3 新增
+    | AgentsListed     # Batch 4
+    | CommandError     # Batch 4
+    | SystemMessage    # Batch 4
 )
