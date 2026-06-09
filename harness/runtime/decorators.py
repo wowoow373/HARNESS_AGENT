@@ -23,7 +23,7 @@ _subscription_registry: list[SubRecord] = []
 """Subscription declaration list."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class SubRecord:
     """A single subscription declaration.
 

@@ -13,13 +13,18 @@ from harness.runtime.decorators import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_registries():
+    """Clear registries before each test for isolation."""
+    _agent_registry.clear()
+    _subscription_registry.clear()
+
+
 class TestAgentDecorator:
     """@agent decorator tests."""
 
     def test_registers_factory_in_registry(self):
         """@agent registers factory in _agent_registry."""
-        _agent_registry.clear()
-
         @agent("test_agent", entry_prompt="do something")
         def make_harness():
             return "fake_harness"
@@ -34,8 +39,6 @@ class TestAgentDecorator:
 
     def test_registers_metadata(self):
         """@agent stores metadata when provided."""
-        _agent_registry.clear()
-
         @agent("worker", entry_prompt="work", metadata={"desc": "a worker"})
         def make_harness():
             return "h"
@@ -44,8 +47,6 @@ class TestAgentDecorator:
 
     def test_duplicate_name_raises(self):
         """Duplicate @agent name raises ValueError."""
-        _agent_registry.clear()
-
         @agent("dup", entry_prompt="first")
         def factory1():
             return "h1"
@@ -57,8 +58,6 @@ class TestAgentDecorator:
 
     def test_factory_preserved_as_callable(self):
         """factory is preserved as the original callable."""
-        _agent_registry.clear()
-
         @agent("a", entry_prompt="go")
         def my_factory():
             return object()
@@ -71,8 +70,6 @@ class TestSubscribe:
 
     def test_adds_sub_record(self):
         """subscribe("A").to("B") appends SubRecord to registry."""
-        _subscription_registry.clear()
-
         subscribe("analyzer").to("collector")
 
         assert len(_subscription_registry) == 1
@@ -82,8 +79,6 @@ class TestSubscribe:
 
     def test_multiple_calls_accumulate(self):
         """Multiple subscribe calls accumulate, not overwrite."""
-        _subscription_registry.clear()
-
         subscribe("A").to("B")
         subscribe("A").to("C")
 
@@ -111,9 +106,6 @@ class TestRegistryIsolation:
 
     def test_importlib_load_fills_registry(self):
         """importlib loading of @agent script fills registry."""
-        _agent_registry.clear()
-        _subscription_registry.clear()
-
         script = '''
 from harness.runtime.decorators import agent, subscribe
 
