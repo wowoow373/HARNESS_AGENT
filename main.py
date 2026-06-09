@@ -156,15 +156,54 @@ def _cmd_run(args: argparse.Namespace) -> int:
             return 1
 
     # 启动会话
+    if args.runtime:
+        return _run_with_runtime(harness)
+    else:
+        try:
+            harness.run()
+        except KeyboardInterrupt:
+            print("\n[系统] 收到中断信号，正在退出...")
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+        print("\n[系统] Agent 已退出。")
+        return 0
+
+
+def _run_with_runtime(harness) -> int:
+    """使用 Runtime 层启动 agent（Mode A 交互式对话）。
+
+    与旧 sync 路径（harness.run()）的区别：
+    - 用户输入通过 SystemConsole（/ 前缀命令可用）
+    - Agent 生命周期由 Kernel + AgentRuntime 管理
+    - 支持 /agents, /kill, /exit 等系统命令
+    - LLM 调用自动 async 化（sync adapter → asyncio.to_thread 桥接）
+
+    Args:
+        harness: 装配好的 Harness 实例。
+        debug: 是否启用 DEBUG 日志。
+
+    Returns:
+        int: 退出码。
+    """
+    from harness.runtime.cli_console import CliConsole
+    from harness.runtime.runtime import Runtime
+
+    console = CliConsole(mode="mode_a")
+    runtime = Runtime(console)
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting agent with Runtime layer (Mode A)")
+
     try:
-        harness.run()
+        runtime.run(harness)
     except KeyboardInterrupt:
         print("\n[系统] 收到中断信号，正在退出...")
     except Exception as e:
         print(f"Error: {e}")
         return 1
 
-    print("\n[系统] Agent 已退出。")
     return 0
 
 
@@ -287,6 +326,11 @@ def main(argv: list[str] | None = None) -> int:
         "--debug", "-d",
         action="store_true",
         help="Enable DEBUG log level",
+    )
+    run_parser.add_argument(
+        "--runtime", "-r",
+        action="store_true",
+        help="Use Runtime layer (Mode A interactive with /commands support)",
     )
 
     args = parser.parse_args(argv)
