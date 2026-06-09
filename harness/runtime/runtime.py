@@ -151,6 +151,10 @@ class Runtime:
         # 2. 从脚本 spawn agent（无 parent）
         result = self._kernel.spawn_from_script(script_path, parent=None)
 
+        # 2a. 设置 CliConsole 的 all_finished 回调（Mode B 空输入退出用）
+        if hasattr(self._console, 'set_all_finished_hook'):
+            self._console.set_all_finished_hook(self._kernel.all_finished)
+
         logger.info(
             f"run_from_script: workflow_flag='{result['workflow_flag']}' "
             f"with {len(result['agents'])} agent(s)"
@@ -179,10 +183,6 @@ class Runtime:
         await self._console.send(RuntimeStarted())
 
         # 7. 等待 agent tasks + 静默检测完成
-        #     task_sys (_handle_system_input) 不在 gather 中——
-        #     它在 stdin readline 上阻塞，永远不会自行退出。
-        #     等 agents 都 FINISHED + _monitor_quiescence 返回后，
-        #     显式取消 task_sys。
         try:
             agent_tasks = list(self._kernel._tasks.values())
             await asyncio.gather(
@@ -190,8 +190,16 @@ class Runtime:
                 return_exceptions=True,
             )
         finally:
-            # 取消系统输入处理（不再需要监听 stdin）
-            task_sys.cancel()
+            # 提示用户退出（用 SystemMessage 而非 CommandError）
+            from .types import SystemMessage
+            await self._console.send(SystemMessage(
+                message="所有 agent 已完成。按 Enter 退出..."
+            ))
+            # task_sys 仍在 readline 中阻塞——等用户按 Enter 后
+            # _handle_system_input 中的 readline 返回 → while 循环
+            # → CliConsole.receive() 检测到 all_finished → 返回
+            # CommandExit() → _handle_system_input 设 _shutdown=True
+            # → 退出循环
             try:
                 await task_sys
             except asyncio.CancelledError:

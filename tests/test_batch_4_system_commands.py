@@ -631,3 +631,156 @@ async def test_handle_system_input_command_error_passthrough():
     passthrough = [e for e in console.sent_events
                    if isinstance(e, CommandError)]
     assert len(passthrough) >= 1
+
+
+# ============================================================================
+# Integration tests — 8 tests
+# ============================================================================
+
+
+@async_test
+async def test_integration_command_flow_kill_agent():
+    """Mode A: /kill collector → agent signalled"""
+    console = MockConsole(commands=[
+        CommandKill(pid="collector"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.RUNNING)
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(
+        console, {"root": root, "collector": collector}
+    )
+    await kernel._handle_system_input()
+    assert collector.should_exit is True
+    state_events = [e for e in console.sent_events
+                    if isinstance(e, AgentStateChanged)]
+    assert any(e.pid == "collector" for e in state_events)
+
+
+@async_test
+async def test_integration_command_flow_list_then_kill():
+    """/agents → /kill root → /exit"""
+    console = MockConsole(commands=[
+        CommandListAgents(),
+        CommandKill(pid="root"),
+        CommandExit(),
+    ])
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"root": root})
+    await kernel._handle_system_input()
+    listed = [e for e in console.sent_events if isinstance(e, AgentsListed)]
+    assert len(listed) == 1
+    assert root.should_exit is True
+    assert kernel._shutdown is True
+
+
+@async_test
+async def test_integration_kill_finished_agent_silent():
+    """/kill FINISHED agent → silent, no CommandError, no sentinel"""
+    console = MockConsole(commands=[
+        CommandKill(pid="collector"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.FINISHED)
+    kernel = _make_kernel_with_agents(console, {"collector": collector})
+    kernel.input_queues["collector"].items.clear()
+    await kernel._handle_system_input()
+    assert len(kernel.input_queues["collector"].items) == 0
+    error_events = [e for e in console.sent_events
+                    if isinstance(e, CommandError)]
+    assert len(error_events) == 0
+
+
+@async_test
+async def test_integration_end_workflow_all_finished():
+    """/end all-FINISHED workflow → no AgentStateChanged"""
+    console = MockConsole(commands=[
+        CommandEndWorkflow(flag="wf_root"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.FINISHED)
+    analyzer = MockAgentRuntime(pid="analyzer", state=AgentState.FINISHED)
+    kernel = _make_kernel_with_agents(
+        console, {"collector": collector, "analyzer": analyzer}
+    )
+    kernel.workflow_table["wf_root"] = ["collector", "analyzer"]
+    await kernel._handle_system_input()
+    state_events = [e for e in console.sent_events
+                    if isinstance(e, AgentStateChanged)]
+    assert len(state_events) == 0
+
+
+@async_test
+async def test_integration_talk_to_agent_full_flow():
+    """Mode B: /talk analyzer → analyzer gets UserRequest → /exit"""
+    console = MockConsole(commands=[
+        CommandTalkDirect(pid="analyzer", text="请重新分析"),
+        CommandExit(),
+    ])
+    analyzer = MockAgentRuntime(pid="analyzer", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"analyzer": analyzer})
+    await kernel._handle_system_input()
+    queue = kernel.input_queues["analyzer"]
+    # First item should be UserRequest
+    assert any(isinstance(item, UserRequest) and item.text == "请重新分析"
+               for item in queue.items)
+    assert kernel._shutdown is True
+
+
+@async_test
+async def test_integration_mode_b_plain_text_rejected():
+    """Mode B plain text → CommandError passthrough, not routed"""
+    received_commands = []
+
+    class _RecordConsole(MockConsole):
+        async def receive(self):
+            if not received_commands:
+                received_commands.append(1)
+                return CommandError(
+                    command="hello",
+                    error="纯文本需 /talk <pid> <text> 指定目标",
+                )
+            return CommandExit()
+
+    console = _RecordConsole(commands=[])
+    kernel = _make_kernel_with_agents(console, {})
+    await kernel._handle_system_input()
+    passthrough = [e for e in console.sent_events
+                   if isinstance(e, CommandError)]
+    assert len(passthrough) >= 1
+
+
+@async_test
+async def test_integration_empty_input_mode_a_skipped():
+    """Mode A empty input → no messages sent to agents"""
+    console = MockConsole(commands=[CommandExit()])
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"root": root})
+    kernel.input_queues["root"].items.clear()
+    await kernel._handle_system_input()
+    # No UserRequest from empty input (only sentinel from /exit)
+    user_requests = [item for item in kernel.input_queues["root"].items
+                     if isinstance(item, UserRequest)]
+    assert len(user_requests) == 0
+
+
+@async_test
+async def test_integration_exit_pushes_sentinel_to_all_non_finished():
+    """/exit → sentinel to RUNNING, skip FINISHED+TERMINATING"""
+    console = MockConsole(commands=[CommandExit()])
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    collector = MockAgentRuntime(pid="collector", state=AgentState.FINISHED)
+    analyzer = MockAgentRuntime(pid="analyzer", state=AgentState.TERMINATING)
+    kernel = _make_kernel_with_agents(
+        console, {"root": root, "collector": collector, "analyzer": analyzer}
+    )
+    for q in kernel.input_queues.values():
+        q.items.clear()
+    await kernel._handle_system_input()
+    # root: sentinel enqueued
+    assert kernel.input_queues["root"].items[-1] is __EXIT_SENTINEL__
+    # collector: FINISHED → skipped
+    assert len(kernel.input_queues["collector"].items) == 0
+    # analyzer: TERMINATING → skipped
+    assert len(kernel.input_queues["analyzer"].items) == 0
+    assert kernel._shutdown is True

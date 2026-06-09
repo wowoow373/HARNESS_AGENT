@@ -682,7 +682,11 @@ class Kernel:
                     killed = self.end_workflow(command.flag)
                     for pid in killed:
                         agent = self.runtime_table.get(pid)
-                        if agent:
+                        # 仅为非 FINISHED/TERMINATING agent 发事件
+                        # （kill() 对已结束 agent 是 no-op）
+                        if agent and agent.state not in (
+                            AgentState.FINISHED, AgentState.TERMINATING
+                        ):
                             await self._console.send(AgentStateChanged(
                                 pid=pid,
                                 old=agent.state.value,
