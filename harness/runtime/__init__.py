@@ -27,6 +27,16 @@ from .types import (
     SystemEvent,
     __EXIT_SENTINEL__,
 )
+from .decorators import agent, subscribe, SubRecord
+from .tools import (
+    CompositeSystemToolProvider,
+    SpawnWorkflowTool,
+    EndWorkflowTool,
+    FinishAgentTool,
+    TalkToTool,
+    ListAgentsTool,
+    create_runtime_tools,
+)
 
 __all__ = [
     # Runtime 入口
@@ -53,4 +63,15 @@ __all__ = [
     "RuntimeStarted",
     "RuntimeStopped",
     "SystemEvent",
+    # Batch 2: Workflow script loading
+    "agent",
+    "subscribe",
+    "SubRecord",
+    "CompositeSystemToolProvider",
+    "SpawnWorkflowTool",
+    "EndWorkflowTool",
+    "FinishAgentTool",
+    "TalkToTool",
+    "ListAgentsTool",
+    "create_runtime_tools",
 ]
