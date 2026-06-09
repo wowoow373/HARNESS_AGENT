@@ -5,6 +5,7 @@
 
 from ..adapters import MinimalLLMAdapter  # re-export for backward compatibility
 from ..config import ConfigLoader, ProfileConfig  # re-export for backward compatibility
+from .async_orchestrator import AsyncLifecycleOrchestrator
 from .container import DIContainer
 from .exceptions import (
     ComponentNotRegisteredError,
@@ -27,6 +28,7 @@ __all__ = [
     "ProfileConfig",
     # Orchestrator
     "LifecycleOrchestrator",
+    "AsyncLifecycleOrchestrator",
     # LLM
     "MinimalLLMAdapter",
     # Exceptions

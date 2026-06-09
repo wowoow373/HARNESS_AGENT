@@ -156,15 +156,77 @@ def _cmd_run(args: argparse.Namespace) -> int:
             return 1
 
     # 启动会话
+    if args.runtime:
+        return _run_with_runtime(harness)
+    else:
+        try:
+            harness.run()
+        except KeyboardInterrupt:
+            print("\n[系统] 收到中断信号，正在退出...")
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+
+        print("\n[系统] Agent 已退出。")
+        return 0
+
+
+def _run_with_runtime(harness) -> int:
+    """使用 Runtime 层启动 agent（Mode A 交互式对话）。"""
+    from harness.runtime.cli_console import CliConsole
+    from harness.runtime.runtime import Runtime
+
+    console = CliConsole(mode="mode_a")
+    runtime = Runtime(console)
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting agent with Runtime layer (Mode A)")
+
     try:
-        harness.run()
+        runtime.run(harness)
     except KeyboardInterrupt:
         print("\n[系统] 收到中断信号，正在退出...")
     except Exception as e:
         print(f"Error: {e}")
         return 1
 
-    print("\n[系统] Agent 已退出。")
+    return 0
+
+
+def _cmd_workflow(args: argparse.Namespace) -> int:
+    """Mode B: 直接启动 workflow 脚本。
+
+    Args:
+        args: 解析后的命令行参数（含 script_path、debug）。
+
+    Returns:
+        int: 退出码。
+    """
+    script_path = args.script_path
+
+    if not os.path.isfile(script_path):
+        print(f"Error: Workflow script '{script_path}' not found.")
+        return 1
+
+    from harness.runtime.cli_console import CliConsole
+    from harness.runtime.runtime import Runtime
+
+    console = CliConsole(mode="mode_b")
+    runtime = Runtime(console)
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting workflow (Mode B): %s", script_path)
+
+    try:
+        runtime.run_from_script(os.path.abspath(script_path))
+    except KeyboardInterrupt:
+        print("\n[系统] 收到中断信号，正在退出...")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
     return 0
 
 
@@ -187,6 +249,7 @@ def _fallback_assemble():
     from harness.components.tool.default_system_tool_provider import (
         DefaultSystemToolProvider,
     )
+    from harness.adapters.llm_adapter import MinimalLLMAdapter
     from harness.interfaces import (
         ContextAssembler,
         GuideProvider,
@@ -227,10 +290,16 @@ def _fallback_assemble():
         SystemToolProvider, DefaultSystemToolProvider()
     )
 
-    logger = logging.getLogger(__name__)
-    logger.info("Fallback assembly: no LLM configured (call_llm=None)")
+    # LLM Adapter — 自动从 .env 或环境变量读取配置
+    llm = MinimalLLMAdapter()
 
-    return Harness.from_container(container, call_llm=None)
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "Fallback assembly: %s @ %s (model=%s)",
+        llm.__class__.__name__, llm.base_url, llm.model,
+    )
+
+    return Harness.from_container(container, call_llm=llm)
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +357,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable DEBUG log level",
     )
+    run_parser.add_argument(
+        "--runtime", "-r",
+        action="store_true",
+        help="Use Runtime layer (Mode A interactive with /commands support)",
+    )
+
+    # ---- workflow ----
+    workflow_parser = subparsers.add_parser(
+        "workflow",
+        help="Run a workflow script directly (Mode B)",
+    )
+    workflow_parser.add_argument(
+        "script_path",
+        help="Path to workflow script (.py file with @agent declarations)",
+    )
+    workflow_parser.add_argument(
+        "--debug", "-d",
+        action="store_true",
+        help="Enable DEBUG log level",
+    )
 
     args = parser.parse_args(argv)
 
@@ -303,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(args)
     elif args.command == "run":
         return _cmd_run(args)
+    elif args.command == "workflow":
+        return _cmd_workflow(args)
     else:
         parser.print_help()
         return 1

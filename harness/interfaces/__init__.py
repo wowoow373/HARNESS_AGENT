@@ -40,7 +40,10 @@ from .types import (
 )
 
 # ── 组件接口（9 个 Protocol + 1 个类型别名） ─────────────────────────────
+from .async_input_adapter import AsyncInputAdapter
+from .async_call_llm import AsyncCallLLM
 from .input_adapter import InputAdapter
+from .system_console import SystemConsole
 from .guide_provider import GuideContext, GuideProvider
 from .context_assembler import ContextAssembler
 from .memory_backend import MemoryBackend
@@ -77,8 +80,11 @@ __all__ = [
     "TextEvent",
     "StopEvent",
     "AdapterEvent",
-    # 10 个组件接口（9 个 Protocol + 1 个函数类型别名）
+    # 13 个组件接口（12 个 Protocol + 1 个函数类型别名）
+    "AsyncInputAdapter",
+    "AsyncCallLLM",
     "InputAdapter",
+    "SystemConsole",
     "GuideProvider",
     "ContextAssembler",
     "MemoryBackend",
