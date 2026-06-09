@@ -114,8 +114,14 @@ class KernelBridgeAdapter:
                 metadata={"stop": True} if isinstance(event, StopEvent) else {},
             )
             self._kernel.message_bus.direct(target, msg)
+            # TextEvent 也同步输出到终端
+            if isinstance(event, TextEvent):
+                await self._kernel._console.send(
+                    AgentOutput(pid=self._pid, content=event.content)
+                )
         else:
-            # pub-sub 路由：走 MessageBus.publish()
+            # pub-sub 路由：TextEvent 在 MessageBus 内部始终输出到终端。
+            # on_no_subscriber 仅作为 MessageBus console 为 None 时的兜底。
             await self._kernel.message_bus.publish(
                 from_pid=self._pid,
                 event=event,

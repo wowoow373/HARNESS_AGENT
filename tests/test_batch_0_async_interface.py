@@ -1393,14 +1393,16 @@ class TestKernelBridgeAdapterSend:
         asyncio.run(_test())
 
     def test_direct_target_text_event(self, setup):
-        """TextEvent, target=pid → 直接入队 target 的 input_queue。"""
+        """TextEvent, target=pid → AgentOutput 到 console + 入队 target queue。"""
         async def _test():
             kernel, _, kba = setup
 
             await kba.send(TextEvent(content="定向消息"), target="target")
 
-            # console 不应收到消息
-            assert len(kernel._console.events) == 0
+            # console 同步收到 AgentOutput（终端始终可见）
+            assert len(kernel._console.events) == 1
+            assert isinstance(kernel._console.events[0], AgentOutput)
+            assert kernel._console.events[0].content == "定向消息"
             # target queue 应有消息
             assert not kernel.input_queues["target"].empty()
             msg = kernel.input_queues["target"].get_nowait()

@@ -102,20 +102,20 @@ class MessageBus:
             if pid in self._input_queues
         }
 
+        # TextEvent 始终输出到终端（无论有无订阅者），
+        # 用户可以实时看到 agent 间的通信流。
+        if isinstance(event, TextEvent):
+            if self._console is not None:
+                await self._console.send(
+                    AgentOutput(pid=from_pid, content=event.content)
+                )
+            elif on_no_subscriber is not None:
+                await on_no_subscriber(
+                    AgentOutput(pid=from_pid, content=event.content)
+                )
+
         if not active_subscribers:
-            # 无活跃订阅者
-            if isinstance(event, TextEvent):
-                # 降级优先级：on_no_subscriber > self._console > 静默丢弃
-                if on_no_subscriber is not None:
-                    await on_no_subscriber(
-                        AgentOutput(pid=from_pid, content=event.content)
-                    )
-                elif self._console is not None:
-                    await self._console.send(
-                        AgentOutput(pid=from_pid, content=event.content)
-                    )
-                # else: 静默丢弃
-            # StopEvent + 无订阅者 → 静默丢弃（无论 callbacks 如何）
+            # StopEvent + 无订阅者 → 静默丢弃
             return
 
         # 构造内部消息

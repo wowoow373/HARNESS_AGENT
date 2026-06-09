@@ -154,7 +154,7 @@ async def test_publish_no_subscribers_stop_event_ignored_with_console():
 
 @async_test
 async def test_publish_on_no_subscriber_priority_over_console():
-    """on_no_subscriber takes priority over internal console fallback."""
+    """TextEvent with console set → console gets the event, on_no_subscriber unused."""
     console = _MockConsole()
     bus = _make_bus(console=console)
     called_with = []
@@ -165,8 +165,9 @@ async def test_publish_on_no_subscriber_priority_over_console():
     await bus.publish("nobody", TextEvent(content="hi"),
                       on_no_subscriber=_cb)
 
-    assert len(called_with) == 1
-    assert len(console.events) == 0
+    # console 始终接收 TextEvent，on_no_subscriber 仅当 console 为 None 时兜底
+    assert len(console.events) == 1
+    assert len(called_with) == 0
 
 
 # ── direct ──

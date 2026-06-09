@@ -169,12 +169,12 @@ class Runtime:
         except NotImplementedError:
             logger.debug("SIGINT handler not available on this platform")
 
-        # 5. 推送启动事件
+        # 6. 推送启动事件
         await self._console.send(RuntimeStarted())
 
         # 6. 等待所有 agent tasks 完成
-        #    Mode B 不启用静默检测：workflow 结束依赖 agent 调用
-        #    finish_agent + 级联终止。所有 agent FINISHED 后 gather 返回。
+        #    collector (oneshot) → auto-FINISHED → cascade → analyzer (continuous) → FINISHED
+        #    不启用静默检测——agent 执行时间差异大，统一的静默阈值不可靠。
         try:
             agent_tasks = list(self._kernel._tasks.values())
             await asyncio.gather(
