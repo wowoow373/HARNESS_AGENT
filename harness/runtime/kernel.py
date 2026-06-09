@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from ..interfaces.types import UserRequest
 from .types import (
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _make_async_llm(sync_call_llm):
+def make_async_llm(sync_call_llm):
     """Wrap a synchronous call_llm as an async callable via asyncio.to_thread."""
     async def _wrapper(msgs, tools, _orig=sync_call_llm):
         return await asyncio.to_thread(_orig, msgs, tools)
@@ -331,7 +331,7 @@ class Kernel:
                 # 5e. Extract and bridge call_llm
                 call_llm = getattr(harness, 'call_llm', None)
                 if call_llm and not asyncio.iscoroutinefunction(call_llm):
-                    call_llm = _make_async_llm(call_llm)
+                    call_llm = make_async_llm(call_llm)
 
                 # 5f. Inject Runtime tools
                 self._inject_runtime_tools(harness.container, pid=name)
@@ -395,7 +395,6 @@ class Kernel:
 
         if _has_loop:
             for name in created_pids:
-                from .types import AgentSpawned
                 asyncio.create_task(
                     self._console.send(
                         AgentSpawned(

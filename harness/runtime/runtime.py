@@ -86,17 +86,12 @@ class Runtime:
 
     async def _run_async(self, harness) -> None:
         """异步主流程。"""
-        from .kernel import Kernel
+        from .kernel import Kernel, make_async_llm
 
         # 1. sync→async LLM bridge（在 Runtime 入口层，不侵入 orchestrator）
         call_llm = getattr(harness, 'call_llm', None)
         if call_llm and not asyncio.iscoroutinefunction(call_llm):
-            original = call_llm
-
-            async def _async_wrapper(msgs, tools):
-                return await asyncio.to_thread(original, msgs, tools)
-
-            call_llm = _async_wrapper
+            call_llm = make_async_llm(call_llm)
             logger.info("Wrapped sync call_llm → async via asyncio.to_thread")
 
         # 2. 创建 Kernel
