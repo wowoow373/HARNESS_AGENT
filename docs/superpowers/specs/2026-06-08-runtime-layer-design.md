@@ -1314,6 +1314,8 @@ main.py 退出，exit code 0
 - 模式 A 的 `Runtime.run(harness)` 入口
 - 测试：单 agent 模式 A 走通 INIT → RUNNING → FINISHED
 
+> 🔌 **端到端能力**：Mode A 单 agent 交互对话已可端到端运行。`Runtime(CliConsole()).run(harness)` → Kernel.spawn_root → AgentRuntime.run() → 用户 stdin 输入 → root agent 回复 → stdout 输出。当前 main.py 尚未接入 Runtime 路径（仍走旧同步 `harness.run()`），需要新建 Runtime 入口脚本或修改 main.py。
+
 ### Batch 2: Workflow 脚本加载
 
 - `@agent` / `subscribe` 装饰器 + registry 机制
@@ -1329,6 +1331,8 @@ main.py 退出，exit code 0
 > - **订阅关系暂存到 `_pending_subscriptions`**，Batch 3 在 MessageBus 创建后统一注册
 > - **级联终止不实现**——属于 Batch 3
 > - **Mode B `run_from_script` 不实现**——属于 Batch 3
+>
+> 🔌 **端到端能力**：**这是第一个可以验证多 agent workflow 的 batch**。Mode A 交互下 LLM 调 `spawn_workflow` → 子 agent 创建并执行 entry_prompt → oneshot 子 agent 自动 FINISHED。父 agent 虽收不到 `child_finished` 自动通知，但可通过 `list_agents` 轮询或子 agent 通过 `talk_to` 主动汇报。**最小端到端测试**：用 mock LLM（按预定计划调 `spawn_workflow`）启动 asyncio event loop，验证子 agent 从 CREATED → FINISHED 完整生命周期，父 agent 通过 `list_agents` 获知子 agent 状态。
 
 ### Batch 3: 消息订阅 + 并发 + 终止
 
@@ -1340,6 +1344,8 @@ main.py 退出，exit code 0
 - 多 agent 并发运行测试
 - Mode B `run_from_script` 入口 + WorkflowFinished 汇总
 
+> 🔌 **端到端能力**：**完整多 agent 协作闭环首次达成**。父 agent `spawn_workflow` → 子 agent 并发运行 → subscribe 流式消息路由 → 子 agent FINISHED → `child_finished` 自动通知父 agent → 级联终止传播退出信号 → 静默检测自动结束。Mode B `run_from_script` 直接启动 workflow 无需 root agent。**最小端到端测试**：`run_from_script("workflow.py")` 启动 → collector + analyzer 并行执行 → analyzer 收到 collector 的 subscribe 输出 → 全部 FINISHED → `WorkflowFinished` 汇总输出。
+
 ### Batch 4: 系统命令 + 信号处理
 
 - SystemCommand 解析（/agents, /talk, /kill, /end, /exit）
@@ -1348,9 +1354,13 @@ main.py 退出，exit code 0
 - `_monitor_quiescence` 实现
 - Runtime.run() 完整集成（return_exceptions, shield）
 
+> 🔌 **端到端能力**：交互式多 agent 操作完整。用户 `/agents` 查看状态 → `/talk <pid>` 定向通信 → `/kill <pid>` 终止单个 agent → `/end <flag>` 终止整个 workflow → `/exit` 优雅退出。SIGINT (Ctrl+C) 两阶段退出（优雅 + 强制）。
+
 ### Batch 5: 打磨
 
 - 异常处理对齐（AgentRuntime.error → child_finished.metadata.error）
 - 文档更新
 - 原 Recursive Harness Pattern 示例替换为 Runtime API
 - ContextAssembler system prompt 注入 Runtime tool 说明
+
+> 🔌 **端到端能力**：生产就绪。异常信息正确传播到父 agent，system prompt 自动包含 Runtime tool 使用说明，`main.py` 完整支持 Runtime 路径。
