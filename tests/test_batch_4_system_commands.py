@@ -327,3 +327,307 @@ async def test_send_system_message():
     assert "[系统]" in output
     assert "所有 agent 已完成" in output
     assert "错误" not in output  # SystemMessage 不应显示"错误"
+
+
+# ============================================================================
+# Kernel._handle_system_input() — 14 tests
+# ============================================================================
+
+
+class MockConsole:
+    """Collects send() calls for verification."""
+    def __init__(self, commands=None):
+        self.sent_events = []
+        self._commands = list(commands) if commands else []
+        self._cmd_idx = 0
+
+    async def receive(self):
+        if self._cmd_idx >= len(self._commands):
+            return CommandExit()
+        cmd = self._commands[self._cmd_idx]
+        self._cmd_idx += 1
+        return cmd
+
+    async def send(self, event):
+        self.sent_events.append(event)
+
+
+class MockAgentRuntime:
+    """Minimal mock AgentRuntime for Kernel tests."""
+    def __init__(self, pid, state=AgentState.RUNNING, mode="oneshot",
+                 parent=None, children=None):
+        self.pid = pid
+        self.state = state
+        self.mode = mode
+        self.parent = parent
+        self.children = children or []
+        self.should_exit = False
+        self.workflow_flag = None
+        self.round_count = 0
+        self.error = None
+        self.started_at = time.time()
+        self.last_output = ""
+
+    def _idle_for_quiescence(self):
+        return self.state == AgentState.RUNNING
+
+
+class MockQueue:
+    """Captures put_nowait calls."""
+    def __init__(self):
+        self.items = []
+
+    def put_nowait(self, item):
+        self.items.append(item)
+
+
+def _make_kernel_with_agents(console, agents):
+    """Create a Kernel with mock agents injected.
+
+    Args:
+        console: MockConsole instance.
+        agents: dict of {pid: MockAgentRuntime}.
+
+    Returns:
+        Kernel instance ready for _handle_system_input testing.
+    """
+    from harness.runtime.kernel import Kernel
+    kernel = Kernel.__new__(Kernel)
+    kernel.runtime_table = agents
+    kernel.input_queues = {pid: MockQueue() for pid in agents}
+    kernel._tasks = {}
+    kernel.workflow_table = {"wf_root": list(agents.keys())}
+    kernel._spawn_counter = 0
+    kernel._console = console
+    kernel._shutdown = False
+    kernel.message_bus = MagicMock()
+    kernel.message_bus.get_subscribers_of.return_value = []
+    kernel._pending_subscriptions = []
+
+    def _send_input(pid, request):
+        if pid in kernel.input_queues:
+            kernel.input_queues[pid].put_nowait(request)
+    kernel.send_input = _send_input
+
+    def kill(pid):
+        agent = agents.get(pid)
+        if agent and agent.state != AgentState.FINISHED:
+            agent.should_exit = True
+            if pid in kernel.input_queues:
+                kernel.input_queues[pid].put_nowait(__EXIT_SENTINEL__)
+
+    def end_workflow(flag):
+        pids = kernel.workflow_table.get(flag, [])
+        for pid in pids:
+            kill(pid)
+        return list(pids)
+
+    kernel.kill = kill
+    kernel.end_workflow = end_workflow
+    return kernel
+
+
+@async_test
+async def test_handle_system_input_command_talk_to_existing_pid():
+    """CommandTalk to existing pid → send_input called"""
+    console = MockConsole(commands=[
+        CommandTalk(pid="root", text="hello"),
+        CommandExit(),
+    ])
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"root": root})
+    await kernel._handle_system_input()
+    queue = kernel.input_queues["root"]
+    # First item should be the UserRequest (sentinel from /exit may follow)
+    assert len(queue.items) >= 1
+    assert queue.items[0].text == "hello"
+
+
+@async_test
+async def test_handle_system_input_command_talk_to_nonexistent_pid():
+    """CommandTalk to nonexistent pid → CommandError"""
+    console = MockConsole(commands=[
+        CommandTalk(pid="ghost", text="hi"),
+        CommandExit(),
+    ])
+    kernel = _make_kernel_with_agents(console, {})
+    await kernel._handle_system_input()
+    error_events = [e for e in console.sent_events
+                    if isinstance(e, CommandError)]
+    assert len(error_events) >= 1
+    assert "ghost" in error_events[0].error
+
+
+@async_test
+async def test_handle_system_input_command_kill_existing_agent():
+    """CommandKill existing agent → should_exit=True, sentinel enqueued"""
+    console = MockConsole(commands=[
+        CommandKill(pid="collector"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"collector": collector})
+    await kernel._handle_system_input()
+    assert collector.should_exit is True
+    assert kernel.input_queues["collector"].items[-1] is __EXIT_SENTINEL__
+    state_events = [e for e in console.sent_events
+                    if isinstance(e, AgentStateChanged)]
+    assert len(state_events) == 1
+
+
+@async_test
+async def test_handle_system_input_command_kill_finished_agent():
+    """CommandKill already-FINISHED agent → silent skip, no sentinel"""
+    console = MockConsole(commands=[
+        CommandKill(pid="collector"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.FINISHED)
+    kernel = _make_kernel_with_agents(console, {"collector": collector})
+    kernel.input_queues["collector"].items.clear()
+    await kernel._handle_system_input()
+    assert collector.should_exit is False
+    assert len(kernel.input_queues["collector"].items) == 0
+
+
+@async_test
+async def test_handle_system_input_command_kill_nonexistent_pid():
+    """CommandKill nonexistent pid → CommandError"""
+    console = MockConsole(commands=[
+        CommandKill(pid="ghost"),
+        CommandExit(),
+    ])
+    kernel = _make_kernel_with_agents(console, {})
+    await kernel._handle_system_input()
+    error_events = [e for e in console.sent_events
+                    if isinstance(e, CommandError)]
+    assert len(error_events) >= 1
+    assert "ghost" in error_events[0].error
+
+
+@async_test
+async def test_handle_system_input_command_list_agents():
+    """CommandListAgents → AgentsListed event"""
+    console = MockConsole(commands=[
+        CommandListAgents(),
+        CommandExit(),
+    ])
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"root": root})
+    await kernel._handle_system_input()
+    listed_events = [e for e in console.sent_events
+                     if isinstance(e, AgentsListed)]
+    assert len(listed_events) == 1
+    assert "root" in listed_events[0].agents
+
+
+@async_test
+async def test_handle_system_input_command_end_workflow_existing():
+    """CommandEndWorkflow existing flag → kills each agent + AgentStateChanged"""
+    console = MockConsole(commands=[
+        CommandEndWorkflow(flag="wf_root"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.RUNNING)
+    analyzer = MockAgentRuntime(pid="analyzer", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(
+        console, {"collector": collector, "analyzer": analyzer}
+    )
+    kernel.workflow_table["wf_root"] = ["collector", "analyzer"]
+    await kernel._handle_system_input()
+    assert collector.should_exit is True
+    assert analyzer.should_exit is True
+    state_events = [e for e in console.sent_events
+                    if isinstance(e, AgentStateChanged)]
+    assert len(state_events) == 2
+
+
+@async_test
+async def test_handle_system_input_command_end_workflow_nonexistent():
+    """CommandEndWorkflow nonexistent flag → CommandError"""
+    console = MockConsole(commands=[
+        CommandEndWorkflow(flag="ghost_wf"),
+        CommandExit(),
+    ])
+    kernel = _make_kernel_with_agents(console, {})
+    await kernel._handle_system_input()
+    error_events = [e for e in console.sent_events
+                    if isinstance(e, CommandError)]
+    assert len(error_events) >= 1
+    assert "ghost_wf" in error_events[0].error
+
+
+@async_test
+async def test_handle_system_input_command_exit():
+    """CommandExit → sentinel to all non-FINISHED, _shutdown=True"""
+    console = MockConsole(commands=[CommandExit()])
+    root = MockAgentRuntime(pid="root", state=AgentState.RUNNING)
+    collector = MockAgentRuntime(pid="collector", state=AgentState.FINISHED)
+    kernel = _make_kernel_with_agents(
+        console, {"root": root, "collector": collector}
+    )
+    await kernel._handle_system_input()
+    assert root.should_exit is True
+    assert kernel.input_queues["root"].items[-1] is __EXIT_SENTINEL__
+    assert len(kernel.input_queues["collector"].items) == 0
+    assert kernel._shutdown is True
+
+
+@async_test
+async def test_handle_system_input_command_talk_direct_existing():
+    """CommandTalkDirect to existing active agent → send_input"""
+    console = MockConsole(commands=[
+        CommandTalkDirect(pid="analyzer", text="请重新分析"),
+        CommandExit(),
+    ])
+    analyzer = MockAgentRuntime(pid="analyzer", state=AgentState.RUNNING)
+    kernel = _make_kernel_with_agents(console, {"analyzer": analyzer})
+    await kernel._handle_system_input()
+    queue = kernel.input_queues["analyzer"]
+    # First item should be the UserRequest (sentinel from /exit may follow)
+    assert len(queue.items) >= 1
+    assert queue.items[0].text == "请重新分析"
+
+
+@async_test
+async def test_handle_system_input_command_talk_direct_nonexistent():
+    """CommandTalkDirect nonexistent pid → CommandError"""
+    console = MockConsole(commands=[
+        CommandTalkDirect(pid="ghost", text="hi"),
+        CommandExit(),
+    ])
+    kernel = _make_kernel_with_agents(console, {})
+    await kernel._handle_system_input()
+    error_events = [e for e in console.sent_events
+                    if isinstance(e, CommandError)]
+    assert len(error_events) >= 1
+
+
+@async_test
+async def test_handle_system_input_command_talk_direct_finished():
+    """CommandTalkDirect to FINISHED agent → CommandError"""
+    console = MockConsole(commands=[
+        CommandTalkDirect(pid="collector", text="hi"),
+        CommandExit(),
+    ])
+    collector = MockAgentRuntime(pid="collector", state=AgentState.FINISHED)
+    kernel = _make_kernel_with_agents(console, {"collector": collector})
+    await kernel._handle_system_input()
+    error_events = [e for e in console.sent_events
+                    if isinstance(e, CommandError)]
+    assert len(error_events) >= 1
+    assert "已结束" in error_events[0].error
+
+
+@async_test
+async def test_handle_system_input_command_error_passthrough():
+    """CommandError (from CliConsole parse failure) → echoed directly"""
+    console = MockConsole(commands=[
+        CommandError(command="/bad", error="未知命令: '/bad'"),
+        CommandExit(),
+    ])
+    kernel = _make_kernel_with_agents(console, {})
+    await kernel._handle_system_input()
+    passthrough = [e for e in console.sent_events
+                   if isinstance(e, CommandError)]
+    assert len(passthrough) >= 1

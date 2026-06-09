@@ -618,22 +618,119 @@ class Kernel:
     async def _handle_system_input(self) -> None:
         """系统输入处理循环。
 
-        Batch 1 stub: 仅纯文本路由到 root（Mode A）。
-        Batch 4 完整实现: /agents /kill /end /exit /talk 命令解析。
+        Batch 4 完整实现: 解析并分发全部 7 种 SystemCommand。
         """
-        logger.info("_handle_system_input: started (stub mode)")
+        from .agent_runtime import AgentState
+        from .types import (
+            CommandTalk, CommandKill, CommandListAgents,
+            CommandEndWorkflow, CommandExit, CommandTalkDirect,
+            CommandError, AgentsListed, AgentStateChanged,
+            __EXIT_SENTINEL__,
+        )
+        from ..interfaces.types import UserRequest
+
+        logger.info("_handle_system_input: started")
         while not self._shutdown:
             command = await self._console.receive()
 
+            # ── CommandTalk: 纯文本路由 ──
             if isinstance(command, CommandTalk):
-                target_pid = command.pid
-                if target_pid in self.runtime_table:
+                if command.pid in self.runtime_table:
                     self.send_input(
-                        target_pid,
+                        command.pid,
                         UserRequest(text=command.text),
                     )
                 else:
-                    logger.warning(
-                        f"No agent with pid '{target_pid}' "
-                        f"for routing text: '{command.text[:50]}...'"
+                    await self._console.send(CommandError(
+                        command=command.text[:50],
+                        error=f"pid '{command.pid}' 不存在",
+                    ))
+
+            # ── CommandKill: 终止单个 agent ──
+            # 注意：AgentStateChanged 是乐观先行发出的——kill() 只设置
+            # should_exit=True + 推送 sentinel，agent 的 state 要到其 run()
+            # 进入 finally 块后才变成 TERMINATING。
+            elif isinstance(command, CommandKill):
+                if command.pid in self.runtime_table:
+                    agent = self.runtime_table[command.pid]
+                    if agent.state == AgentState.FINISHED:
+                        logger.debug(
+                            f"_handle_system_input: /kill '{command.pid}' "
+                            f"already FINISHED, skipping"
+                        )
+                    else:
+                        self.kill(command.pid)
+                        await self._console.send(AgentStateChanged(
+                            pid=command.pid,
+                            old=agent.state.value,
+                            new="terminating",
+                        ))
+                else:
+                    await self._console.send(CommandError(
+                        command=f"/kill {command.pid}",
+                        error=f"pid '{command.pid}' 不存在",
+                    ))
+
+            # ── CommandListAgents: 列出所有 agent ──
+            elif isinstance(command, CommandListAgents):
+                info = self.list_agents()
+                await self._console.send(AgentsListed(agents=info))
+
+            # ── CommandEndWorkflow: 终止整个 workflow ──
+            elif isinstance(command, CommandEndWorkflow):
+                if command.flag in self.workflow_table:
+                    killed = self.end_workflow(command.flag)
+                    for pid in killed:
+                        agent = self.runtime_table.get(pid)
+                        if agent:
+                            await self._console.send(AgentStateChanged(
+                                pid=pid,
+                                old=agent.state.value,
+                                new="terminating",
+                            ))
+                else:
+                    await self._console.send(CommandError(
+                        command=f"/end {command.flag}",
+                        error=f"workflow flag '{command.flag}' 不存在",
+                    ))
+
+            # ── CommandExit: 优雅退出 ──
+            elif isinstance(command, CommandExit):
+                logger.info("_handle_system_input: /exit received")
+                for pid, agent in self.runtime_table.items():
+                    if agent.state not in (
+                        AgentState.FINISHED, AgentState.TERMINATING
+                    ):
+                        agent.should_exit = True
+                        if pid in self.input_queues:
+                            self.input_queues[pid].put_nowait(
+                                __EXIT_SENTINEL__
+                            )
+                self._shutdown = True
+                return  # 退出循环
+
+            # ── CommandTalkDirect: 定向消息（Mode B） ──
+            elif isinstance(command, CommandTalkDirect):
+                target = self.runtime_table.get(command.pid)
+                if target is None:
+                    await self._console.send(CommandError(
+                        command=f"/talk {command.pid}",
+                        error=f"pid '{command.pid}' 不存在",
+                    ))
+                elif target.state == AgentState.FINISHED:
+                    await self._console.send(CommandError(
+                        command=f"/talk {command.pid}",
+                        error=f"Agent '{command.pid}' 已结束 (FINISHED)，"
+                              f"无法接收消息",
+                    ))
+                else:
+                    self.send_input(
+                        command.pid,
+                        UserRequest(text=command.text),
                     )
+
+            # ── CommandError (由 CliConsole 解析失败产生) ──
+            elif isinstance(command, CommandError):
+                await self._console.send(command)
+
+        logger.info("_handle_system_input: exited loop")
