@@ -53,7 +53,7 @@
 | 层 | 职责 | 实例数 |
 |----|------|--------|
 | Runtime | 顶层入口，创建 Kernel + SystemConsole，启动事件循环，注册信号处理 | 1 |
-| Kernel | 进程表维护、消息按订阅路由、spawn / kill / end_workflow、静默检测 | 1 (全局单例) |
+| Kernel | 进程表维护、消息按订阅路由、spawn / kill / end_workflow、静默检测（opt-in） | 1 (全局单例) |
 | AgentRuntime | 每个 agent 的"进程控制块"：父子引用、状态机、模式（continuous / oneshot）、包裹 LifecycleOrchestrator | N |
 | AsyncLifecycleOrchestrator | 新增，参照原 LifecycleOrchestrator 迁移为 async（阻塞点 `await`）。原版不动 | 每个 AgentRuntime 1 个 |
 | Harness | 现有接口，`from_container()` 保留，外部代码不感知 Runtime 层 | 每个 AgentRuntime 1 个 |
@@ -83,7 +83,7 @@ CREATED ──→ INIT ──→ RUNNING ──→ TERMINATING ──→ FINISHE
 |------|------|---------|---------|
 | CREATED | spawn 完成，Task 未创建 | Kernel.spawn() | `asyncio.create_task(run())` |
 | INIT | `_phase_init()` 执行中，等首条输入 | `run()` 开始 | 收到首个 UserRequest，init 完成 |
-| RUNNING | 对话循环运行中 | init 完成 | should_exit / 异常 / oneshot 本轮结束 |
+| RUNNING | 对话循环运行中 | init 完成 | should_exit / 异常 / oneshot 本轮结束 / max_rounds |
 | TERMINATING | `_phase_end()` 执行中 | should_exit = True | 清理完成 |
 | FINISHED | 会话结束，不可逆 | `_phase_end()` 完成 | — |
 
@@ -93,7 +93,7 @@ CREATED ──→ INIT ──→ RUNNING ──→ TERMINATING ──→ FINISHE
 |--------|---------|
 | CREATED | Kernel.end_workflow 在 spawn 后但 start 前调用 |
 | INIT | `adapter.receive()` 返回 `__EXIT_SENTINEL__` 包装的 UserRequest |
-| RUNNING | `should_exit = True`（end_workflow / finish_agent / max_rounds / 静默检测）；`adapter.receive()` 返回 `__EXIT_SENTINEL__` |
+| RUNNING | `should_exit = True`（end_workflow / finish_agent / max_rounds）；`adapter.receive()` 返回 `__EXIT_SENTINEL__` |
 | RUNNING (await LLM 中) | LLM 返回后 `should_exit` 为 True，或 input_queue 中排队了 `__EXIT_SENTINEL__` |
 | 任意状态 | 未捕获异常传播到 `run()` → finally 块执行 |
 
@@ -116,12 +116,13 @@ CREATED ──→ INIT ──→ RUNNING ──→ TERMINATING ──→ FINISHE
 **模式判定规则**：
 
 - **Mode A 的 root agent**：强制 `continuous`
-- **Mode B 的 entry agent**：强制 `oneshot`
-- **spawn_from_script 创建的子 agent**：如果脚本中显式声明了 `subscribe` 则 `continuous`，否则 `oneshot`
+- **spawn_from_script 创建的所有 agent**（含 Mode B 的 entry agent）：如果 agent 出现在任一 `subscribe` 声明中（无论是 subscriber 还是 publisher），则为 `continuous`；只有完全未参与任何 subscribe 关系的 agent 才为 `oneshot`
+
+> 更新: 2026-06-09 — publisher 也为 continuous。若 publisher 为 oneshot，其自动退出会触发级联终止（4.5），向 subscriber 推送 `__EXIT_SENTINEL__`，导致 subscriber 在收到中间消息前就被 kill。正确的做法是让 publisher 也保持 continuous，由用户手动 `/end` 或 `/exit` 终止。因此，所有参与 subscribe 关系的 agent 统一为 `continuous`，oneshot 仅限完全独立的 agent。
 
 规则在 `AgentRuntime.__init__` 中确定，LLM 不可见。
 
-模式仅影响 agent 完成一轮后的默认行为。无论哪种模式，`end_workflow`、`max_rounds`、异常、静默检测都可以在任何时候终止 agent。
+模式仅影响 agent 完成一轮后的默认行为。无论哪种模式，`end_workflow`、`max_rounds`、异常都可以在任何时候终止 agent。
 
 ### 3.3 终止路径汇总
 
@@ -131,7 +132,7 @@ CREATED ──→ INIT ──→ RUNNING ──→ TERMINATING ──→ FINISHE
 | `end_workflow(flag)` | 父 agent (LLM tool) 或 用户 (/end) | Kernel 向 workflow 所有 agent 推 `__EXIT_SENTINEL__` + 设 `should_exit` | workflow 级 |
 | `finish_agent()` | agent 自身 (LLM tool) | Kernel 向自己的 input_queue 推 `__EXIT_SENTINEL__` + 设 `should_exit` | 单个 agent |
 | `max_rounds` | Runtime（AgentRuntime.run） | 轮次计数器超限 → `should_exit = True` | 安全网 |
-| 静默检测 | Kernel 监控协程 | 所有 agent 都在 WAITING_INPUT → 向全体推送 `__EXIT_SENTINEL__` | Mode B 结束机制 |
+| 静默检测 | Kernel 监控协程 | 所有 agent 都在 WAITING_INPUT → 向全体推送 `__EXIT_SENTINEL__` | 保留供 opt-in，默认不使用 |
 | 级联终止 | Kernel（agent FINISHED 时） | agent FINISHED → 向显式订阅了该 agent 的其他 agent 推送 `__EXIT_SENTINEL__` | 有 subscribe 关系的 agent |
 | `/exit` 命令 | 用户 (SystemConsole) | Kernel 向全体推送 `__EXIT_SENTINEL__` | 交互式退出 |
 | SIGINT (Ctrl+C) | OS 信号 | Runtime 信号处理器 → 两阶段优雅关闭 | 全局 |
@@ -303,9 +304,11 @@ all_finished() → bool
 
 **回滚**：步骤 3-6 中任意步骤失败 → 对已创建的 AgentRuntime 调用 kill() → 异常透传给 tool caller。步骤 2 中加载失败 → 异常直接透传。
 
-### 4.4 静默检测
+### 4.4 静默检测（保留供 opt-in，默认不使用）
 
-Mode B 下 entry agent 之间通过 subscribe 通信。当所有 agent 都完成工作、进入 WAITING_INPUT 且无人会再产生输出时，Runtime 需要检测到这一"静默"状态并终止所有 agent。
+> 更新: 2026-06-09 — 静默检测已从 Mode A 和 Mode B 的默认行为中移除。agent 执行时间差异过大，固定间隔的"静默"判断不可靠——有的 agent 调用快速模型几秒完成，有的调用慢速模型需要数十秒，不存在一个对所有场景都正确的 quiescence 间隔。替代方案：Mode A 由用户 `/exit` 或 SIGINT 终止；Mode B 由用户 `/end` 或 `/exit` 终止。Workflow agent 全部为 continuous（参见 3.2），终止由用户手动触发。
+
+`_monitor_quiescence` 实现保留在 Kernel 中，用户可通过配置显式启用。以下为参考实现：
 
 ```
 # Kernel 内部，run() 中启动的监控协程
@@ -410,8 +413,12 @@ async def _handle_system_input(self):
 
         elif isinstance(command, CommandTalkDirect):
             # Mode B: /talk <pid> <text>
+            # 附带 metadata 标识消息来自人类用户（非其他 agent）
             if command.pid in self.runtime_table:
-                self.send_input(command.pid, UserRequest(text=command.text))
+                self.send_input(command.pid, UserRequest(
+                    text=command.text,
+                    metadata={"from": "user", "type": "talk"},
+                ))
             else:
                 await self._console.send(CommandError(
                     command="/talk", error=f"pid '{command.pid}' 不存在"))
@@ -471,9 +478,12 @@ collector 调用 `adapter.send(TextEvent(...))` 时：
 1. `KernelBridgeAdapter.send()` → `MessageBus.publish(from="collector", event=TextEvent)`
 2. MessageBus 查订阅表 → analyzer 订阅了 collector
 3. 消息投递到 `input_queues["analyzer"]`
-4. analyzer 从 `adapter.receive()` 收到 UserRequest(text=..., metadata={from: "collector"})
+4. 同时推送 `AgentOutput` 到 SystemConsole（始终可见，无论是否有订阅者）
+5. analyzer 从 `adapter.receive()` 收到 UserRequest(text=..., metadata={from: "collector"})
 
-collector 调用 `adapter.send(StopEvent(...))` 时同样投递，但 StopEvent 内容不在 UserRequest.text 中体现（metadata 中标记 `stop: true`）。
+collector 调用 `adapter.send(StopEvent(...))` 时同样投递，MessageBus 将其包装为 `InternalMessage`（含 `metadata={"stop": True}`）并推入 subscriber 的 input_queue。但是 `KernelBridgeAdapter.receive()` 在取出消息时**跳过** `metadata.stop=True` 的 InternalMessage，不交给 LLM——subscriber 本轮已从 TextEvent 收到足够信息，StopEvent 对 LLM 无意义，传入反而可能导致空消息混淆。
+
+> 更新: 2026-06-09 — StopEvent 过滤。KBA.receive() 检测 InternalMessage 的 metadata.stop 字段，为 True 则循环取下一个消息。这确保 subscriber 的 LLM 只看到有内容的 TextEvent，不会收到 stop 标记导致的空 UserRequest。
 
 每轮 StopEvent 触发后，本轮最后一条 TextEvent 推给订阅者。
 
@@ -495,17 +505,22 @@ adapter.send(TextEvent("请重新分析"), target="analyzer")
 - `target=None`：MessageBus 按订阅表广播
 - `target=pid`：MessageBus 忽略订阅表，直接投递到 `input_queues[pid]`
 
-### 5.5 无订阅者的降级
+### 5.5 始终可见
 
-TextEvent 通过 `adapter.send(target=None)` 发送时，若 MessageBus 中无订阅者，降级为 `AgentOutput` SystemEvent 推给 SystemConsole：
+> 更新: 2026-06-09 — TextEvent 不再"降级"。MessageBus.publish() 始终向 SystemConsole 推送 AgentOutput（无论是否有订阅者），用户可实时看到 agent 间的所有通信内容。
+
+TextEvent 通过 `adapter.send(target=None)` 发送时，MessageBus 同时做两件事：
+1. 按订阅表路由给订阅者（如有）
+2. 始终推送 `AgentOutput` SystemEvent 给 SystemConsole
 
 ```
 adapter.send(TextEvent("结果..."))
-→ MessageBus.publish(): 无订阅者
-→ console.send(AgentOutput(pid=..., content="结果..."))
+→ MessageBus.publish():
+  1. 有订阅者 → 投递 InternalMessage 到 input_queues[subscriber]
+  2. 始终 → console.send(AgentOutput(pid=..., content="结果..."))
 ```
 
-StopEvent 无订阅者时直接丢弃。
+StopEvent 无订阅者时直接丢弃，且不推送给 SystemConsole。
 
 ### 5.6 通信退出保护
 
@@ -589,7 +604,7 @@ subscribe(subscriber: str).to(publisher: str)
 
 在模块顶层声明。Kernel 在 `spawn_from_script` 时读取 `_subscription_registry` 并注册到 MessageBus。
 
-声明了 `subscribe` 的 agent 的 mode 自动设为 `continuous`（需要持续通信）。未声明 `subscribe` 的 agent 为 `oneshot`。
+> 更新: 2026-06-09 — 参与 subscribe 声明的所有 agent（subscriber 和 publisher 双方）mode 自动设为 `continuous`。若 publisher 为 oneshot，其自动退出触发级联终止会在 subscriber 处理消息前 kill 对方。只有完全未出现在任何 subscribe 声明中的 agent 才为 `oneshot`。
 
 ### 6.4 Registry 隔离
 
@@ -637,7 +652,7 @@ class SystemConsole(Protocol):
 | `CommandEndWorkflow(flag)` | `/end <flag>` | `end_workflow(flag)` →
  推送 `AgentStateChanged` 事件 |
 | `CommandExit()` | `/exit` | 向全体推送 `__EXIT_SENTINEL__`，设 `_shutdown = True` |
-| `CommandTalkDirect(pid, text)` | `/talk <pid> <text>` (Mode B) | `send_input(pid, UserRequest(text))` |
+| `CommandTalkDirect(pid, text)` | `/talk <pid> <text>` (Mode B) | `send_input(pid, UserRequest(text, metadata={"from": "user", "type": "talk"}))`。metadata 告知接收 agent 消息来自人类用户而非其他 agent |
 
 ### 7.3 SystemEvent 类型
 
@@ -646,7 +661,7 @@ class SystemConsole(Protocol):
 | `AgentSpawned(pid, parent)` | spawn 完成 | 通知 |
 | `AgentStateChanged(pid, old, new)` | 状态转移 | 通知 |
 | `AgentFinished(pid, result, duration, error)` | agent 进入 FINISHED | 通知 |
-| `AgentOutput(pid, content)` | agent 的 TextEvent 无订阅者 | 降级通知 |
+| `AgentOutput(pid, content)` | agent 发送 TextEvent 时 | 始终推送（无论是否有订阅者） |
 | `AgentsListed(agents)` | `/agents` 响应 | 查询响应 |
 | `CommandError(command, error)` | 系统命令执行失败 | 查询响应 |
 | `RuntimeStarted()` | 事件循环启动 | 生命周期 |
@@ -697,6 +712,7 @@ WorkflowFinished → 格式化每个 agent 的最终结果
 | child_finished（默认订阅） | `_on_agent_finished` → `send_input(parent)` → `adapter.receive()` | `UserRequest(text="[pid] 完成...", metadata={type:"child_finished", pid, workflow_flag, error})` |
 | 流式订阅输出 | MessageBus → input_queue[subscriber] → `adapter.receive()` | `UserRequest(text=..., metadata={from: publisher_pid})` |
 | talk_to 定向消息 | `adapter.send(target=pid)` → input_queue[target] → `adapter.receive()` | `UserRequest(text=..., metadata={from: sender_pid})` |
+| /talk 用户消息 | SystemConsole → Kernel → `send_input(pid)` → `adapter.receive()` | `UserRequest(text=..., metadata={"from": "user", "type": "talk"})`。接收 agent 可区分人类用户消息与 agent 间通信 |
 | 退出信号 | `__EXIT_SENTINEL__` → `adapter.receive()` | `UserRequest(text="", metadata={exit: True})` |
 | peer_terminated | 级联终止 → `send_input(subscriber)` → `adapter.receive()` | `UserRequest(text="", metadata={type:"peer_terminated", pid})` |
 
@@ -793,9 +809,8 @@ Runtime(console).run(root_harness)
    → console.send(AgentSpawned(pid="root", parent=None))
 3. task_root = asyncio.create_task(root_runtime.run())
 4. task_sys  = asyncio.create_task(kernel._handle_system_input())
-5. task_mon  = asyncio.create_task(kernel._monitor_quiescence())
-6. await asyncio.gather(task_root, task_sys, task_mon, return_exceptions=True)
-7. console.send(RuntimeStopped())
+5. await asyncio.gather(task_root, task_sys, return_exceptions=True)
+6. console.send(RuntimeStopped())
 ```
 
 进程树：
@@ -803,7 +818,7 @@ Runtime(console).run(root_harness)
 ```
 user (逻辑根，parent = None)
   └── root agent (pid="root", mode=continuous, parent=None)
-         ├── collector (pid="collector", mode=oneshot, parent=root)
+         ├── collector (pid="collector", mode=continuous, parent=root)
          └── analyzer (pid="analyzer", mode=continuous, parent=root)
 ```
 
@@ -826,21 +841,20 @@ Runtime(console).run_from_script("workflow.py")
 1. 创建 Kernel(console)
 2. result = kernel.spawn_from_script(script_path, parent=None)
    → 返回 {workflow_flag, agents: [{pid}]}
-   → 所有 entry agent 的 mode：有 subscribe 声明的为 continuous，否则为 oneshot
+   → 所有参与 subscribe 关系的 entry agent（publisher 和 subscriber 双方）mode 为 continuous；完全未参与的为 oneshot
 3. task_sys = asyncio.create_task(kernel._handle_system_input())
-4. task_mon = asyncio.create_task(kernel._monitor_quiescence())
-5. await asyncio.gather(*kernel._tasks.values(), task_sys, task_mon, return_exceptions=True)
-6. # 收集最终输出
+4. await asyncio.gather(*kernel._tasks.values(), task_sys, return_exceptions=True)
+5. # 收集最终输出
    results = {pid: {"output": r.last_output, "error": r.error, "rounds": r.round_count}
               for pid, r in kernel.runtime_table.items()}
-7. console.send(WorkflowFinished(results=results))
+6. console.send(WorkflowFinished(results=results))
 ```
 
 进程树：
 
 ```
 user (逻辑根)
-  ├── collector (pid="collector", mode=oneshot, parent=None)
+  ├── collector (pid="collector", mode=continuous, parent=None)
   └── analyzer (pid="analyzer", mode=continuous, parent=None)
 ```
 
@@ -848,11 +862,11 @@ SystemConsole 行为：
 - 纯文本无 `/` 前缀 → 无 root agent 可路由，推送 `CommandError` 提示使用 `/talk`
 - `/talk <pid> <text>` → `CommandTalkDirect(pid, text)` → `send_input(pid, ...)`
 - `/agents` `/kill <pid>` `/end <flag>` `/exit` → 同模式 A
-- agent 的 TextEvent 无订阅者 → 降级为 `AgentOutput` SystemEvent → stdout 显示
+- agent 的 TextEvent → 始终推送 `AgentOutput` SystemEvent → stdout 显示（无论是否有订阅者）
 
-**模式 B 的结束机制**：不是依赖 max_rounds，而是静默检测。当所有 agent 完成工作进入 WAITING_INPUT，监控协程检测到静默，推送 `__EXIT_SENTINEL__` 给所有 agent，agent 依次进入 TERMINATING → FINISHED。
+**模式 B 的结束机制**：由于 workflow agent 均为 continuous，终止完全由用户手动触发——输入 `/end <flag>` 终止整个 workflow，或 `/exit` 终止所有 agent 并退出 Runtime。不再依赖静默检测自动结束。
 
-对于简单的 oneshot agent（如 collector），它一轮完成后自动进入 TERMINATING，不需要静默检测参与。静默检测主要覆盖 continuous agent 通过 subscribe 通信完成后的终止。
+> 更新: 2026-06-09 — 静默检测移除，workflow agent 全部 continuous（含 publisher），终止变为手动。理由：(1) agent 执行时间差异过大，固定间隔的静默检测不可靠；(2) publisher 为 continuous 后，不再自动退出，也不触发级联终止，因此无需外部自动检测。
 
 ---
 
@@ -1017,7 +1031,23 @@ class AsyncInputAdapter(Protocol):
 
 ### 13.1 KernelBridgeAdapter
 
-`KernelBridgeAdapter` 实现 `AsyncInputAdapter`，是 Runtime 路径下所有 agent 的 I/O 通道：
+`KernelBridgeAdapter` 实现 `AsyncInputAdapter`，是 Runtime 路径下所有 agent 的 I/O 通道。
+
+> 更新: 2026-06-09 — KBA 支持 DI 容器解析。`_resolve_adapter()` 辅助方法先尝试 `container.resolve(AsyncInputAdapter)`，若容器中已注册自定义 AsyncInputAdapter 实现则使用之；否则回退到默认 KBA。用户可在 workflow 脚本中按 agent 注册自定义 AsyncInputAdapter 实现，实现 agent 级别的 I/O 行为定制。
+
+**DI 解析流程**：
+
+```python
+# AgentRuntime 内部
+def _resolve_adapter(self, container, pid, kernel, runtime):
+    """尝试从 DI 容器解析 AsyncInputAdapter，失败则回退到默认 KBA。"""
+    try:
+        return container.resolve(AsyncInputAdapter)
+    except (LookupError, TypeError):
+        return KernelBridgeAdapter(pid=pid, kernel=kernel, runtime=runtime)
+```
+
+默认 `KernelBridgeAdapter` 实现：
 
 ```python
 class KernelBridgeAdapter:
@@ -1027,13 +1057,16 @@ class KernelBridgeAdapter:
         self._runtime = runtime
 
     async def receive(self) -> UserRequest:
-        item = await self._kernel.input_queues[self._pid].get()
-        if item is __EXIT_SENTINEL__:
-            return UserRequest(text="", metadata={"exit": True})
-        elif isinstance(item, InternalMessage):
-            return UserRequest(text=item.content, metadata={**item.metadata, "from": item.from_pid})
-        elif isinstance(item, UserRequest):
-            return item
+        while True:
+            item = await self._kernel.input_queues[self._pid].get()
+            if item is __EXIT_SENTINEL__:
+                return UserRequest(text="", metadata={"exit": True})
+            elif isinstance(item, InternalMessage):
+                if item.metadata.get("stop"):
+                    continue  # 跳过 StopEvent，不交给 LLM
+                return UserRequest(text=item.content, metadata={**item.metadata, "from": item.from_pid})
+            elif isinstance(item, UserRequest):
+                return item
 
     async def send(self, event: Event, target=None) -> None:
         if self._runtime.should_exit:
@@ -1042,12 +1075,14 @@ class KernelBridgeAdapter:
             self._kernel.message_bus.direct(target, InternalMessage(
                 from_pid=self._pid, content=event.content, metadata={}))
         else:
+            # 始终推送 SystemConsole（无论是否有订阅者）
+            if isinstance(event, TextEvent):
+                asyncio.create_task(
+                    self._kernel._console.send(AgentOutput(pid=self._pid, content=event.content))
+                )
             self._kernel.message_bus.publish(
                 from_pid=self._pid, event=event,
-                on_no_subscriber=(
-                    self._kernel._console.send
-                    if isinstance(event, TextEvent) else None
-                )
+                on_no_subscriber=None  # 不再需要降级回调
             )
 ```
 
@@ -1056,6 +1091,7 @@ class KernelBridgeAdapter:
 | 入队类型 | receive() 转换 |
 |---------|---------------|
 | `UserRequest` | 原样返回 |
+| `InternalMessage(from_pid, content, metadata={stop: True})` | 跳过，循环取下一个 |
 | `InternalMessage(from_pid, content, metadata)` | `UserRequest(text=content, metadata={..., from: from_pid})` |
 | `__EXIT_SENTINEL__` | `UserRequest(text="", metadata={"exit": True})` |
 
@@ -1083,8 +1119,6 @@ Runtime.run() 内部:
      → state=INIT → _phase_init() → adapter.receive() → input_queues["root"].get() [阻塞]
   4. asyncio.create_task(kernel._handle_system_input())
      → console.receive() → asyncio.to_thread(sys.stdin.readline) [阻塞]
-  5. asyncio.create_task(kernel._monitor_quiescence())
-     → sleep(1)... 等待
 ```
 
 **阶段 1 — 用户输入 "分析代码库"**
@@ -1114,7 +1148,7 @@ root _phase_loop:
   → adapter.send(TextEvent("代码库有 50 个 .py 文件..."))
       → KernelBridgeAdapter.send() → should_exit? False
       → MessageBus.publish(from="root", event=TextEvent)
-      → 无订阅者 → console.send(AgentOutput(pid="root", content="..."))
+      → 始终 → console.send(AgentOutput(pid="root", content="..."))
       → CliConsole: "[root] 代码库有 50 个 .py 文件..."
   → adapter.send(StopEvent(...))
       → 无订阅者 → 丢弃
@@ -1147,43 +1181,53 @@ root _phase_loop:
 **阶段 4 — 子 agent 并发运行**
 
 ```
-collector (oneshot):
+collector (continuous, 声明了 subscribe):
   → adapter.receive() → UserRequest(text="采集代码库中...", metadata={workflow_flag:"wf_001"})
   → _phase_loop: call_llm(...) → response
   → TextEvent("采集到 28 个文件...")
   → StopEvent
-  → 外层 while: mode="oneshot" → should_exit = True → break
-  → finally: _phase_end() → state=FINISHED → _finished.set()
+  → 外层 while: mode="continuous" → 不自动退出
+  → 下一轮 adapter.receive() [阻塞——等父 agent /end 或 terminate]
 
 analyzer (continuous, 声明了 subscribe):
   → adapter.receive() → entry_prompt
   → _phase_loop: call_llm → 可能输出"等待 collector 数据...", adapter.receive [阻塞]
   → collector 的 TextEvent → MessageBus → input_queues["analyzer"]
+  → 同时 TextEvent 推送到 SystemConsole（始终可见）
   → adapter.receive() → UserRequest(text="采集到 28 个文件...", metadata={from:"collector"})
   → call_llm → "分析完成，发现 3 个问题..."
-  → TextEvent/StopEvent → MessageBus → collector 已 FINISHED, 没人订阅 → 降级到 AgentOutput
+  → TextEvent/StopEvent → MessageBus → 推送 SystemConsole（始终可见）
   → 下一轮 adapter.receive() [阻塞]
 ```
 
-**阶段 5 — 子 agent 完成通知**
+**阶段 5 — 子 agent 收到 root 的 child_finished / 用户终止**
 
 ```
-collector FINISHED → _on_agent_finished:
-  → console.send(AgentFinished("collector", ...))
-  → send_input("root", UserRequest(text="[collector] 已完成。\n采集到 28 个文件", metadata={type:"child_finished", pid:"collector", ...}))
-  → collector 级联：谁 subscribe 了 collector? analyzer → 推送 __EXIT_SENTINEL__ 给 analyzer
+# collector 和 analyzer 都在 WAITING_INPUT 中等待（continuous 模式，不自动退出）
+
+# 用户输入 /end wf_001，或 root LLM 调 end_workflow("wf_001"):
+kernel.end_workflow("wf_001"):
+  → 向 collector 和 analyzer 推送 __EXIT_SENTINEL__
+
+collector 收到 sentinel → _should_exit → break → TERMINATING → FINISHED
+  → _on_agent_finished:
+    → console.send(AgentFinished("collector", ...))
+    → send_input("root", UserRequest(text="[collector] 已完成。\n采集到 28 个文件", metadata={type:"child_finished", ...}))
+    → collector 级联：谁 subscribe 了 collector? analyzer → 推送 __EXIT_SENTINEL__（analyzer 可能已收到）
 
 analyzer 收到 sentinel → _should_exit → break → TERMINATING → FINISHED
-
-analyzer FINISHED → _on_agent_finished:
-  → console.send(AgentFinished("analyzer", ...))
-  → send_input("root", UserRequest(text="[analyzer] 已完成。\n发现 3 个问题...", metadata={...}))
-  → analyzer 级联：谁 subscribe 了 analyzer? collector 已 FINISHED → 跳过
+  → _on_agent_finished:
+    → console.send(AgentFinished("analyzer", ...))
+    → send_input("root", UserRequest(text="[analyzer] 已完成。\n发现 3 个问题...", metadata={...}))
+    → analyzer 级联：谁 subscribe 了 analyzer? collector 已 FINISHED → 跳过
 ```
 
 **阶段 6 — root 收到 child_finished，汇报**
 
 ```
+# root 在阶段 4 或 5 中调了 end_workflow("wf_001") 终止子 agent
+# 子 agent FINISHED → _on_agent_finished → send_input 向 root 投递 child_finished
+
 root: adapter.receive() [被 child_finished 唤醒]
   → UserRequest(text="[collector] 已完成...")
   → call_llm → LLM 看到 collector 完成
@@ -1193,7 +1237,6 @@ root: adapter.receive() [被 child_finished 唤醒]
   → [下一轮] adapter.receive() → UserRequest(text="[analyzer] 已完成...")
   → call_llm → LLM 看到全部完成
   → TextEvent("分析完成！发现以下问题：...")
-  → LLM 可能调 end_workflow("wf_001")（可选——如果还有 agent 没 FINISHED）
 ```
 
 **阶段 7 — 用户 /exit**
@@ -1209,7 +1252,6 @@ root: 如果正在 WAITING_INPUT → adapter.receive() → UserRequest(metadata=
   → _on_agent_finished → console.send(AgentFinished("root", ...))
 
 all_finished() → True
-_monitor_quiescence 检测到全部 FINISHED → 返回
 _handle_system_input 退出
 asyncio.gather 返回
 console.send(RuntimeStopped())
@@ -1222,22 +1264,28 @@ main.py 退出，exit code 0
 main.py: Runtime(console).run_from_script("workflow.py")
 
 1. Kernel.spawn_from_script("workflow.py", parent=None)
-   → collector (oneshot), analyzer (continuous)
+   → collector (continuous), analyzer (continuous)  # 双方都在 subscribe 关系中
    → entry_prompts 投递
 
 2. collector 和 analyzer 的 Task 启动
-3. _handle_system_input 和 _monitor_quiescence 启动
+3. _handle_system_input 启动
 
 collector:
   → entry_prompt → call_llm → TextEvent → StopEvent
-  → mode=oneshot → should_exit=True → TERMINATING → FINISHED
-  → _on_agent_finished: 无 parent, 级联推送 __EXIT_SENTINEL__ 给 analyzer
+  → mode=continuous → 进入 WAITING_INPUT 等待下一轮输入或终止信号
+  → 下一轮 adapter.receive() [阻塞]
 
 analyzer:
   → entry_prompt → call_llm → adapter.receive() [等 collector 消息]
-  → 收到 collector TextEvent → call_llm → 分析...
+  → 收到 collector TextEvent（MessageBus 路由）→ call_llm → 分析...
   → adapter.receive() [等下一轮]
-  → 收到级联的 __EXIT_SENTINEL__ → _should_exit → TERMINATING → FINISHED
+  → 继续等待新的 collector 消息或用户 /end / /exit
+
+# 用户输入 /end wf_001 终止 workflow
+_handle_system_input:
+  → kernel.end_workflow("wf_001")
+  → collector 和 analyzer 的 input_queue 收到 __EXIT_SENTINEL__
+  → 两者从 WAITING_INPUT 被唤醒 → _should_exit → TERMINATING → FINISHED
 
 _all_finished() → True
 
@@ -1249,6 +1297,8 @@ run_from_script 返回前:
 main.py 退出，exit code 0
 ```
 
+> 更新: 2026-06-09 — 静默检测移除，collector 从 oneshot 改为 continuous。现在两个 agent 都保持 continuous，等用户手动 `/end` 终止。不再出现 collector 自动退出 → 级联终止 → analyzer 被迫退出的问题。
+
 ---
 
 ## 十四、关键设计决策
@@ -1257,9 +1307,9 @@ main.py 退出，exit code 0
 |------|------|------|
 | 并发模型 | asyncio 单线程协程 | agent 90%+ 时间在等 LLM (I/O)，asyncio 足够 |
 | Kernel 角色 | 全局单例，做机制不做策略 | 邮局模型：路由消息、登记 agent、分配执行；不编排 workflow |
-| Agent 运行模式 | continuous / oneshot 两态 | oneshot 解决了 Mode B 和子 agent"完成即退出"的语义；continuous 覆盖交互和持续通信场景 |
-| 终止机制 | 多路径互补：oneshot 自动 / end_workflow / finish_agent / 静默检测 / 级联 / max_rounds | 覆盖所有场景，无需 LLM 发明终止协议 |
-| 静默检测 | Kernel 监控协程，1s 轮询 | Mode B 的核心结束机制——当所有 agent 都在 WAITING_INPUT，无人会再产生输出 |
+| Agent 运行模式 | continuous / oneshot 两态。参与 subscribe 的双方（subscriber + publisher）均为 continuous | oneshot 仅限完全独立的 agent；publisher 为 continuous 避免自动退出触发级联终止 |
+| 终止机制 | 多路径互补：oneshot 自动 / end_workflow / finish_agent / 级联 / max_rounds / 手动 /end /exit | 覆盖所有场景，无需 LLM 发明终止协议 |
+| 静默检测 | Kernel 监控协程，1s 轮询（保留供 opt-in，默认不使用） | 不可靠——agent 执行时间差异过大，不存在通用的 quiescence 间隔。替代方案为手动终止 |
 | 级联终止 | agent FINISHED → 订阅者收 `__EXIT_SENTINEL__` | 避免 subscribe 关系中的死锁——一个退出，另一个感知并退出 |
 | SIGINT | 两阶段：优雅推送 sentinel → 强制 task.cancel | 先给 agent 机会保存轨迹，二次中断强制退出 |
 | Registry 隔离 | spawn 前清空全局 registry + 固定模块名覆盖 | MPI 最简单的隔离方案，无需引入线程局部或上下文变量 |
@@ -1287,7 +1337,7 @@ main.py 退出，exit code 0
 | 所有其他 Protocol 接口 | 不变 | ✅ |
 | AgentRuntime 状态机 | 新增 | ✅ 在 LifecycleOrchestrator 之上 |
 | SystemConsole | 新增接口 | ✅ 与 InputAdapter 完全独立 |
-| KernelBridgeAdapter | 新增 | ✅ 实现 InputAdapter Protocol，对接 Kernel 消息队列 |
+| KernelBridgeAdapter | 新增 | ✅ 实现 AsyncInputAdapter Protocol，对接 Kernel 消息队列。支持 DI 容器解析：用户可在 workflow 脚本中注册自定义 AsyncInputAdapter 实现，否则回退到默认 KBA |
 
 ---
 
@@ -1340,18 +1390,16 @@ main.py 退出，exit code 0
 - 默认订阅（child_finished）
 - 流式订阅（显式 subscribe）
 - 级联终止
-- 静默检测
 - 多 agent 并发运行测试
 - Mode B `run_from_script` 入口 + WorkflowFinished 汇总
 
-> 🔌 **端到端能力**：**完整多 agent 协作闭环首次达成**。父 agent `spawn_workflow` → 子 agent 并发运行 → subscribe 流式消息路由 → 子 agent FINISHED → `child_finished` 自动通知父 agent → 级联终止传播退出信号 → 静默检测自动结束。Mode B `run_from_script` 直接启动 workflow 无需 root agent。**最小端到端测试**：`run_from_script("workflow.py")` 启动 → collector + analyzer 并行执行 → analyzer 收到 collector 的 subscribe 输出 → 全部 FINISHED → `WorkflowFinished` 汇总输出。
+> 🔌 **端到端能力**：**完整多 agent 协作闭环首次达成**。父 agent `spawn_workflow` → 子 agent 并发运行 → subscribe 流式消息路由 → 子 agent FINISHED → `child_finished` 自动通知父 agent → 级联终止传播退出信号 → 用户 `/end` 手动结束。Mode B `run_from_script` 直接启动 workflow 无需 root agent。**最小端到端测试**：`run_from_script("workflow.py")` 启动 → collector + analyzer 并行执行 → analyzer 收到 collector 的 subscribe 输出 → 用户 `/end` → 全部 FINISHED → `WorkflowFinished` 汇总输出。
 
 ### Batch 4: 系统命令 + 信号处理
 
 - SystemCommand 解析（/agents, /talk, /kill, /end, /exit）
 - SystemEvent 查询响应类型（AgentsListed, CommandError）
 - SIGINT 两阶段处理
-- `_monitor_quiescence` 实现
 - Runtime.run() 完整集成（return_exceptions, shield）
 
 > 🔌 **端到端能力**：交互式多 agent 操作完整。用户 `/agents` 查看状态 → `/talk <pid>` 定向通信 → `/kill <pid>` 终止单个 agent → `/end <flag>` 终止整个 workflow → `/exit` 优雅退出。SIGINT (Ctrl+C) 两阶段退出（优雅 + 强制）。

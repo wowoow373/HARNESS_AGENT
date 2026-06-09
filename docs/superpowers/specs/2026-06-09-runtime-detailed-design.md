@@ -68,6 +68,8 @@ MessageBus.publish(                         │
                                       )
 ```
 
+> 更新 2026-06-09: TextEvent 在 publish() 路径中**始终输出到 SystemConsole**（MessageBus 持有 console 引用，无订阅者时走内部 fallback，有订阅者时 MessageBus 内部也推送到 console）。此外，KBA.receive() 过滤 StopEvent 标记的 InternalMessage（`metadata["stop"]==True`）——订阅者已在同一 round 收到 TextEvent，StopEvent 仅用于告知 round 结束，不推给 LLM。
+
 #### 场景 B：定向投递（talk_to tool → target=pid）
 
 ```
@@ -95,6 +97,8 @@ MessageBus.direct("analyzer",                   │
                                        → UserRequest(text="请重新分析",
                                                      metadata={from:"root"})
 ```
+
+> 更新 2026-06-09: direct() 路径中 TextEvent **同步输出到 SystemConsole**（与 publish 路径行为一致），确保定向消息也对用户可见。
 
 #### 场景 C：无订阅者降级（TextEvent → AgentOutput SystemEvent）
 
@@ -595,7 +599,7 @@ harness/
 **Batch 2 订阅暂存说明**：`Kernel.spawn_from_script()` 在步骤 4 读取 `_subscription_registry`，但此时 MessageBus 还是 `None`（Batch 1 遗留）或空壳。因此 Batch 2 将订阅关系存入 `Kernel._pending_subscriptions: list[tuple[str, str]]`。Batch 3 MessageBus 创建后，Kernel 在 `__init__` 或首次 `spawn_from_script` 时将所有 pending 订阅注册到 MessageBus。对 Batch 2 期间的 agent 行为无影响——因为 Batch 2 还没有 subscribe 声明的 agent 需要通信（所有子 agent 之间的通信在 Batch 3 才启用）。
 
 > ⚠️ **Batch 2 职责边界（本 batch 明确不做）**：
-> - **`subscribe` 声明仅影响 agent mode**（有订阅关系的 agent → `continuous`，否则 → `oneshot`）。**不做消息路由**——MessageBus 在 Batch 3 创建后才能投递消息
+> - **`subscribe` 声明仅影响 agent mode**（`subscribe` 声明中出现的 **所有 agent**（subscriber + publisher）→ `continuous`；未出现在任何 subscribe 声明中的 agent → `oneshot`）。**不做消息路由**——MessageBus 在 Batch 3 创建后才能投递消息
 > - **`child_finished` 自动通知不实现**：`_on_agent_finished` 仍为 Batch 1 stub（仅推送 `AgentFinished` 到 SystemConsole），不构造 `child_finished` UserRequest 也不向父 agent 推送。父 agent 需通过 `list_agents` tool 主动查询或子 agent 通过 `talk_to` 主动汇报
 > - **级联终止不实现**——`_on_agent_finished` 不通过 MessageBus 查询订阅者并推送 `__EXIT_SENTINEL__`
 > - **静默检测完整实现不包含**——`_monitor_quiescence` 仍为 Batch 1 stub（仅等 `all_finished()`）
@@ -618,8 +622,10 @@ harness/
   │                               #   - _on_agent_finished: 默认订阅(child_finished)
   │                               #     推送 + 级联终止(通过 MessageBus.
   │                               #     get_subscribers_of)
-  │                               #   - _monitor_quiescence: 实际实现(不再是 stub)
-  │                               #   - workflow_table 集成静默检测
+  │                               #   - _monitor_quiescence: 完整实现但默认不启用
+  │                               #     (Mode A 下 root idle 会误判;
+  │                               #      Mode B 下执行时间差异大, 统一阈值不可靠)
+  │                               #     方法保留供 opt-in
   ├── bridge_adapter.py           # 替换内联降级路由 → 连接 MessageBus:
   │                               #   - target=None → message_bus.publish(...)
   │                               #   - target=pid → message_bus.direct(...)
@@ -628,18 +634,27 @@ harness/
 
 #### Batch 4：系统命令 + 信号处理
 
+> 更新 2026-06-09: 本 batch 实际实现较原设计有调整——`_handle_system_input` 完整实现了 7 种 SystemCommand 解析（/agents /kill /end /exit /talk + CommandTalkDirect + CommandError），但去除了与 `_monitor_quiescence` 的耦合。Mode A 不启动静默监控（root agent 在 receive() 中 idle 会被误判为工作完成），Mode B 直接等待 agent tasks 完成而非依赖静默检测。`asyncio.shield` 保护 `_phase_end` 被推迟。Workflow 由用户 /end、/exit 或 SIGINT 控制终止。
+
 ```
 [修改]
  harness/runtime/
-  ├── kernel.py                   # 完善: _handle_system_input 命令解析循环
+  ├── kernel.py                   # 完善: _handle_system_input 完整命令解析
+  │                               #   支持 7 种 SystemCommand: CommandTalk,
+  │                               #   CommandKill, CommandListAgents,
+  │                               #   CommandEndWorkflow, CommandExit,
+  │                               #   CommandTalkDirect, CommandError
   ├── cli_console.py              # 完善:
   │                               #   - receive() 命令解析规则
   │                               #     (/agents /kill /end /exit /talk)
   │                               #   - send() 格式化输出
   ├── signals.py                  # 完善: Runtime.run() 中 signal handler 注册
+  │                               #   (SIGINT 两阶段处理)
   └── runtime.py                  # 完善:
-                                  #   - asyncio.gather(return_exceptions=True)
-                                  #   - asyncio.shield 保护 _phase_end
+                                  #   - Mode A: asyncio.gather(root_task, sys_task)
+                                  #     不启用 _monitor_quiescence
+                                  #   - Mode B: 等待所有 agent tasks 完成后
+                                  #     提示用户按 Enter，不启用静默检测
 ```
 
 #### Batch 5：打磨
@@ -827,7 +842,7 @@ Batch 4 → Batch 5:
 | 方法 | Batch 1 | Batch 2 | Batch 3 | Batch 4 |
 |------|---------|---------|---------|---------|
 | `_on_agent_finished(runtime)` | stub：仅推送 `AgentFinished` 到 SystemConsole | （不变） | **完整实现**：+ 默认订阅推 `child_finished` 到父 agent + 通过 MessageBus 查询订阅者并级联推送 sentinel | （不变） |
-| `_monitor_quiescence()` | stub：`while not all_finished(): await asyncio.sleep(1)` | （不变） | **完整实现**：检查所有非 FINISHED agent 是否 idle，若是则全体推送 sentinel | （不变） |
+| `_monitor_quiescence()` | stub：`while not all_finished(): await asyncio.sleep(1)` | （不变） | **完整实现**：检查所有非 FINISHED agent 是否 idle，若是则全体推送 sentinel | > 更新 2026-06-09: 完整实现但**默认不启用**。Mode A 不启动（root 在 receive() 中 idle 会误判）；Mode B 不启动（agent 执行时间差异大，统一阈值不可靠）。方法保留供 opt-in 使用。Workflow 由 /end 或 /exit 终止，Mode A 由 /exit 或 SIGINT 终止。 |
 | `_handle_system_input()` | stub：仅 `readline` → 纯文本路由到 root（Mode A） | （不变） | （不变） | **完整实现**：`/agents` `/kill` `/end` `/exit` `/talk` 命令解析 + `SystemEvent` 查询响应 |
 | `spawn_root(harness)` | **完整实现** | （不变） | （不变） | （不变） |
 | `spawn_from_script(path, parent)` | — | **完整实现**（含 `_pending_subscriptions` 暂存） | 升级：将 `_pending_subscriptions` 注册到 MessageBus | （不变） |
@@ -943,10 +958,10 @@ Batch 4 → Batch 5:
 |---|------|---------|
 | 1 | MessageBus | 按 Section 2 的接口+伪代码。需补充：`_subscriptions` 管理——agent FINISHED 后 Kernel 调用 `remove_publisher(pid)` 清理（防止死 agent 积累） |
 | 2 | 默认订阅 vs 显式订阅 | 默认订阅（child_finished）走 `Kernel._on_agent_finished` → `send_input(parent)`，不经过 MessageBus。显式订阅（subscribe）走 MessageBus.publish()。确保 parent 不会收到两份通知——检查 parent 是否也显式 subscribe 了子 agent |
-| 3 | 级联 + 静默的交互 | collector FINISHED → 级联推送 `__EXIT_SENTINEL__` → analyzer 被唤醒 → analyzer TERMINATING → FINISHED。静默检测此时也看到 all_idle → 推送 sentinel → analyzer 可能收到第二次 sentinel。KernelBridgeAdapter.receive() 中对重复 sentinel 的处理——第一次收到 sentinel 后 agent 进入 TERMINATING，第二次 `input_queues[pid].get()` 可能已经取不到（queue 可能被清理）或取到但 `should_exit` 已为 True——幂等 |
+| 3 | 级联 + 静默的交互 | > 更新 2026-06-09: `_monitor_quiescence` 默认不启用，故此交互风险不影响默认行为。opt-in 启用时需注意：collector FINISHED → 级联推送 `__EXIT_SENTINEL__` → analyzer 被唤醒 → analyzer TERMINATING → FINISHED。若静默检测也看到 all_idle → 推送第二次 sentinel → KBA.receive() 对重复 sentinel 幂等（`should_exit` 已为 True） |
 | 4 | KBA 升级 | 从内联降级路由切换到 MessageBus。`on_no_subscriber` 回调签名匹配：`Callable[[SystemEvent], Awaitable[None]]` —— CliConsole.send 的签名必须匹配 |
-| 5 | Mode B `run_from_script` | 和 `run()` 的差异：不创建 root agent；仍启动 `_handle_system_input`（Mode B 下用户仍可 `/talk`, `/agents`, `/kill`, `/end`, `/exit`）；结束条件：静默检测 or `/exit` or 所有 agent FINISHED |
-| 6 | 静默检测 | 1s 轮询间隔的权衡——太短浪费 CPU，太长 Mode B 结束时用户感知延迟。1s 是合理的默认值吗？是否需要可配置？ |
+| 5 | Mode B `run_from_script` | > 更新 2026-06-09: 和 `run()` 的差异：不创建 root agent；仍启动 `_handle_system_input`（Mode B 下用户仍可 `/talk`, `/agents`, `/kill`, `/end`, `/exit`）；结束条件：级联终止（collector oneshot 自动退出 → 级联 kill subscribers）后等待所有 agent tasks 完成 → 提示用户按 Enter。**不依赖静默检测**（agent 执行时间差异大，统一阈值不可靠） |
+| 6 | 静默检测 | > 更新 2026-06-09: `_monitor_quiescence` 完整实现但**不在默认路径中启用**。方法保留供 opt-in。若启用：1s 轮询间隔的权衡——太短浪费 CPU，太长 Mode B 结束时用户感知延迟。1s 是合理的默认值吗？是否需要可配置？ |
 
 #### Batch 4：系统命令 + 信号处理
 
@@ -954,9 +969,9 @@ Batch 4 → Batch 5:
 |---|------|---------|
 | 1 | 命令解析 | Edge cases：`/talk` 后的 text 含空行/换行（readline 只读一行）？`/kill` 不存在的 pid？空输入（用户只按回车）？Ctrl+D（EOF）？ |
 | 2 | SIGINT 两阶段 | `loop.add_signal_handler(signal.SIGINT, handler)` 在 asyncio 中的限制——必须在主线程调用，不能在子线程的事件循环注册。如果 Runtime 在非主线程创建呢？ |
-| 3 | `_handle_system_input` 并发 | 和 `_monitor_quiescence` 并发运行，两者都读 `runtime_table`。asyncio 单线程下不需要锁（无真正的并发），但 await 点之间状态可能变——需要用 `list()` 做快照还是接受"短暂不一致"？ |
+| 3 | `_handle_system_input` 并发 | > 更新 2026-06-09: `_monitor_quiescence` 默认不启用，故此并发风险不影响默认路径。opt-in 启用时：两者都读 `runtime_table`，asyncio 单线程下不需要锁，但 await 点之间状态可能变——需要用 `list()` 做快照还是接受"短暂不一致"？ |
 | 4 | `CommandExit` 清理顺序 | 设 `_shutdown=True` → 推全体 sentinel → 等 gather 返回。如果此时 stdin 还有未读数据（管道输入），_handle_system_input 已退出，剩余输入丢失——是否算 bug？ |
-| 5 | Mode B `/talk` 的语义 | `/talk <pid> <text>` 向指定 agent 投递 UserRequest。如果目标 agent 是 oneshot 且已 FINISHED——推送 `CommandError`？如果目标 agent 在 WAITING_INPUT——投递成功，agent 被唤醒 |
+| 5 | Mode B `/talk` 的语义 | > 更新 2026-06-09: `/talk <pid> <text>` 向指定 agent 投递 UserRequest。如果目标 agent 已 FINISHED——推送 `CommandError`（已实现：`target.state == AgentState.FINISHED` 检查）；如果目标 agent 在 WAITING_INPUT（continuous mode）——投递成功，agent 被唤醒。注意 oneshot agent 在 subscribe 声明之外才出现，且自动退出后即 FINISHED |
 
 #### Batch 5：打磨
 
@@ -1018,4 +1033,7 @@ KernelBridgeAdapter.send(event=TextEvent("..."), target=None)
 | MessageBus 不推送 sentinel | sentinel 推送在 Kernel 层 | 级联终止是 Kernel 的策略决策 |
 | publish() 内部降级 vs on_no_subscriber 回调 | 回调优先 | 允许 KBA 自定义降级策略，MessageBus 的 console 引用作为 fallback |
 | Outer-loop 归属 | 方案 A：`_phase_loop()` 只跑一轮，`AgentRuntime.run()` 拥有外循环 | `AsyncLifecycleOrchestrator._phase_loop()` 重构为单轮执行（仅内层 while），`AgentRuntime.run()` 控制 max_rounds 计数、should_exit 检查和 adapter.receive() 调用。`_idle_for_quiescence()` 在 AgentRuntime 层判断"等待输入" |
+| Agent mode 判定（subscribe 中的 role） | > 更新 2026-06-09: subscribe 声明中出现的**所有 agent**（subscriber + publisher）→ `continuous`；未出现在任何 subscribe 声明中的 agent → `oneshot` | 原设计为"仅 subscriber 为 continuous，publisher 可为 oneshot"。但 publisher 设为 oneshot 时 auto-exit 触发级联终止，导致 subscriber 在被 kill 前来不及消费消息。改为 subscribe 声明中所有参与者均为 continuous，由用户 /end 或父 agent end_workflow 控制 workflow 生命周期 |
+| 静默检测默认不启用 | `_monitor_quiescence` 完整实现但**不在默认路径中启用**，方法保留供 opt-in | Mode A：root agent 在 adapter.receive() 中等待用户输入时处于 idle，静默检测会误判为"工作完成"而强制终止。Mode B：agent 执行时间差异大，统一静默阈值不可靠。Workflow 终止由 /end、/exit 或 SIGINT 控制，级联终止通过 publisher auto-exit (oneshot) 或显式 kill 触发 |
+| TextEvent 始终输出到 SystemConsole | > 更新 2026-06-09: TextEvent 无论走 publish 还是 direct 路径，**始终同步输出到 SystemConsole** | publish 路径：MessageBus 持有 console 引用，内部在路由给订阅者时也推送 console。direct 路径：KBA.send() 显式调用 `self._kernel._console.send()`。确保用户始终看到 agent 输出，即使订阅者已终止 |
 | TextEvent 投递时机 | 立即投递 | `adapter.send(TextEvent)` 后立即经过 MessageBus → 订阅者 input_queue。顶层设计 Section 5.3 总结句"StopEvent 后投递"需要修正——实际行为是 TextEvent 立即可达，只是这一个 round 内只有最终的 TextEvent 被路由（中间 ToolCall/ToolResult 不路由） |

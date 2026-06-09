@@ -18,13 +18,14 @@ Harness Agent Runtime 有两层 I/O 通道，分别服务于不同的目的：
 │  ┌────────────────────────────────────────────────┐  │
 │  │  Agent I/O (对话内容, tool 调用)                  │  │
 │  │  agent ↔ agent（MessageBus 消息路由）            │  │
-│  │  [LLM 内部通信，终端不可见]                       │  │
+│  │  TextEvent 始终显示，中间事件降级到终端            │  │
 │  └────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────┘
 ```
 
 - **SystemConsole**：你与 Runtime 的交互界面。输入 `/` 命令管理 agent，看到系统事件通知。
-- **Agent I/O**：agent 之间的消息通信。TextEvent 通过 MessageBus 在 agent 间路由，中间事件（Thinking/ToolCall/ToolResult）降级到终端显示。
+- **StopEvent 过滤**：agent 之间的 StopEvent（终止信号）会被 MessageBus 过滤，**不会**传递给订阅者。订阅者只接收 TextEvent，避免了空消息干扰 LLM 推理。
+- **Agent I/O**：agent 之间的消息通信。TextEvent 通过 MessageBus 在 agent 间路由，且**始终**在终端显示，即使有订阅者也不会隐藏——你可以实时看到完整的 agent 间对话。中间事件（Thinking/ToolCall/ToolResult）同样降级到终端显示。
 
 ---
 
@@ -63,7 +64,7 @@ Runtime(CliConsole(mode='mode_b')).run_from_script('workflow.py')
 "
 ```
 
-不创建 root agent，直接运行 workflow 脚本。所有 agent 完成后显示汇总结果。
+不创建 root agent，直接运行 workflow 脚本。Mode B 下的所有 agent 均为 **continuous** 模式——它们不会自动退出，而是持续运行直到你手动终止。要结束 workflow，使用 `/end <flag>` 或 `/exit`。
 
 ```
 [系统] Runtime 启动
@@ -71,6 +72,12 @@ Runtime(CliConsole(mode='mode_b')).run_from_script('workflow.py')
 [系统] Agent spawned: analyzer
 [collector] 采集到 28 个文件，总计 4500 行
 [analyzer] 分析完成，发现 3 个问题...
+# agent 持续运行，等待你的指令或手动终止
+你: /talk analyzer 重新分析第3个问题
+[analyzer] 好的，重新分析...
+[analyzer] 问题3重新分析完成
+# 结束 workflow
+你: /end wf_001
 [系统] Agent finished: collector (12.5s, 正常完成)
 [系统] Agent finished: analyzer (8.2s, 正常完成)
 [系统] Workflow wf_001 完成:
@@ -144,6 +151,7 @@ MODE 可能值：`continuous`（持续等待输入）| `oneshot`（一轮后自�
 
 - 仅在 Mode B 下使用（Mode A 下纯文本自动路由到 root agent）
 - 消息以 `UserRequest` 形式投递到目标 agent 的 input_queue
+- 消息附带身份元数据（identity metadata），标明消息来源是**人类用户**而非其他 agent，目标 agent 可以据此区分人类指令与 agent 间通信
 - 目标必须是活跃 agent（state ≠ FINISHED）
 
 ---
@@ -159,7 +167,7 @@ MODE 可能值：`continuous`（持续等待输入）| `oneshot`（一轮后自�
 | `AgentSpawned` | agent 创建 | `[系统] Agent spawned: collector, parent=root` |
 | `AgentStateChanged` | 状态变更 | `[系统] Agent collector: running → terminating` |
 | `AgentFinished` | agent 完成 | `[系统] Agent finished: collector (12.5s, 正常完成)` |
-| `AgentOutput` | agent 输出无订阅者 | `[collector] 采集到 28 个文件...` |
+| `AgentOutput` | agent TextEvent 输出（始终显示） | `[collector] 采集到 28 个文件...` |
 | `WorkflowFinished` | Mode B 全部完成 | 格式化表格汇总 |
 | `AgentsListed` | `/agents` 响应 | 格式化状态表格 |
 | `CommandError` | 命令执行失败 | `[系统] 错误: pid 'ghost' 不存在` |
@@ -179,6 +187,7 @@ MODE 可能值：`continuous`（持续等待输入）| `oneshot`（一轮后自�
 | 结束后 | 用户 `/exit` 退出 | 按 Enter 退出 |
 | EOF (Ctrl+D) | 同 `/exit` | 同 `/exit` |
 | 空输入 | 忽略 | 运行中：报错提示；结束后：等同 `/exit` |
+| Agent 模式 | root 为 continuous，子 agent 由 workflow 决定 | 所有 agent 均为 continuous，不会自动退出 |
 
 ---
 
