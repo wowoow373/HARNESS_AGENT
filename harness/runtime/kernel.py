@@ -293,13 +293,10 @@ class Kernel:
                     f"agent. Known: {list(decorators._agent_registry.keys())}"
                 )
 
-        # ── Step 4: 注册订阅关系到 MessageBus ──
-        for sub in decorators._subscription_registry:
-            self.message_bus.subscribe(sub.subscriber, sub.publisher)
-            logger.debug(
-                f"spawn_from_script: subscribed "
-                f"'{sub.subscriber}' → '{sub.publisher}'"
-            )
+        # ── Step 4 (暂存): 暂存订阅关系，延后注册到 MessageBus ──
+        # 不在此时注册——如果 step 5 的 agent 创建失败，
+        # 已注册的订阅关系成为孤立引用。
+        _pending_subs = list(decorators._subscription_registry)
 
         # ── Step 5: Create AgentRuntime for each @agent ──
         created_pids: list[str] = []
@@ -378,6 +375,16 @@ class Kernel:
                         if created_pid in parent.children:
                             parent.children.remove(created_pid)
                 raise
+
+        # ── Step 5.5: 注册订阅关系到 MessageBus ──
+        # 放在 agent 全部创建成功后——如果 step 5 失败并 rollback，
+        # 不会留下孤立订阅。
+        for sub in _pending_subs:
+            self.message_bus.subscribe(sub.subscriber, sub.publisher)
+            logger.debug(
+                f"spawn_from_script: subscribed "
+                f"'{sub.subscriber}' → '{sub.publisher}'"
+            )
 
         # ── Step 6: Push SystemConsole events ──
         try:
@@ -554,11 +561,12 @@ class Kernel:
                 AgentState.FINISHED, AgentState.TERMINATING
             ):
                 sub_runtime.should_exit = True
-                self.input_queues[sub_pid].put_nowait(__EXIT_SENTINEL__)
-                logger.info(
-                    f"_on_agent_finished: cascade sentinel sent "
-                    f"to '{sub_pid}' (subscribed to '{runtime.pid}')"
-                )
+                if sub_pid in self.input_queues:
+                    self.input_queues[sub_pid].put_nowait(__EXIT_SENTINEL__)
+                    logger.info(
+                        f"_on_agent_finished: cascade sentinel sent "
+                        f"to '{sub_pid}' (subscribed to '{runtime.pid}')"
+                    )
 
         # ── 4. 清理订阅表 ──
         self.message_bus.remove_publisher(runtime.pid)

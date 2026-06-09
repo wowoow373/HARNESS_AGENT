@@ -178,15 +178,25 @@ class Runtime:
         # 6. 推送启动事件
         await self._console.send(RuntimeStarted())
 
-        # 7. 等待全部完成
+        # 7. 等待 agent tasks + 静默检测完成
+        #     task_sys (_handle_system_input) 不在 gather 中——
+        #     它在 stdin readline 上阻塞，永远不会自行退出。
+        #     等 agents 都 FINISHED + _monitor_quiescence 返回后，
+        #     显式取消 task_sys。
         try:
+            agent_tasks = list(self._kernel._tasks.values())
             await asyncio.gather(
-                *self._kernel._tasks.values(),
-                task_sys,
-                task_mon,
+                *agent_tasks, task_mon,
                 return_exceptions=True,
             )
         finally:
+            # 取消系统输入处理（不再需要监听 stdin）
+            task_sys.cancel()
+            try:
+                await task_sys
+            except asyncio.CancelledError:
+                pass
+
             try:
                 loop.remove_signal_handler(signal.SIGINT)
             except (NotImplementedError, RuntimeError):
