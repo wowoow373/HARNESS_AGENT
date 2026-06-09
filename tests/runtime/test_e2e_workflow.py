@@ -12,6 +12,7 @@ import pytest
 from harness.core.container import DIContainer
 from harness.di import Harness
 from harness.interfaces.input_adapter import InputAdapter
+from harness.interfaces.types import UserRequest
 from harness.runtime.kernel import Kernel
 from harness.runtime.agent_runtime import AgentRuntime, AgentState
 
@@ -287,3 +288,150 @@ class TestMinimalE2EWorkflow:
             asyncio.run(_run())
         finally:
             os.unlink(path)
+
+
+# ── Batch 3 E2E: subscribe 路由 + 级联终止 + 全流程 FINISHED ──────────────
+
+
+def _make_counting_llm(responses: list[str]):
+    """创建一个依次返回指定文本的 async mock LLM。
+
+    每次调用返回下一个响应，用完最后一个后返回空字符串。
+    """
+    call_count = [0]
+
+    async def _mock_llm(messages, tools=None):
+        from harness.interfaces.types import Response
+        idx = call_count[0]
+        call_count[0] += 1
+        if idx < len(responses):
+            return Response(text=responses[idx], stop_reason="end_turn")
+        return Response(text="done", stop_reason="end_turn")
+
+    return _mock_llm
+
+
+def test_batch3_subscribe_routing_and_cascade_e2e():
+    """Batch 3 E2E: subscribe 消息路由 + 级联终止 → 全部 FINISHED。
+
+    验证：
+    1. subscribe 注册到 MessageBus
+    2. collector 产生 TextEvent → MessageBus.publish → analyzer 收到
+    3. collector FINISHED → cascade → analyzer 收到 sentinel
+    4. 全部 FINISHED + WorkflowFinished 可收集
+    """
+    mock_content = f'''import asyncio
+from harness.core.container import DIContainer
+from harness.di import Harness
+from harness.interfaces.input_adapter import InputAdapter
+from harness.interfaces.types import Response
+from harness.runtime.decorators import agent, subscribe
+
+_call_count = [0]
+async def _mock_llm(messages, tools=None):
+    idx = _call_count[0]
+    _call_count[0] += 1
+    responses = ["28 files found", "analysis complete"]
+    if idx < len(responses):
+        return Response(text=responses[idx], stop_reason="end_turn")
+    return Response(text="done", stop_reason="end_turn")
+
+@agent("collector", entry_prompt="collect data")
+def assemble_collector():
+    container = DIContainer()
+    container.register(InputAdapter, object())
+    return Harness.from_container(container, call_llm=_mock_llm)
+
+@agent("analyzer", entry_prompt="analyze data")
+def assemble_analyzer():
+    container = DIContainer()
+    container.register(InputAdapter, object())
+    return Harness.from_container(container, call_llm=_mock_llm)
+
+subscribe("analyzer").to("collector")
+'''
+    with tempfile.NamedTemporaryFile(
+        mode='w', suffix='.py', delete=False,
+    ) as f:
+        f.write(mock_content)
+        path = f.name
+
+    async def _run():
+        kernel = Kernel(_MockConsole())
+        result = kernel.spawn_from_script(path)
+
+        assert result["workflow_flag"].startswith("wf_")
+        assert len(result["agents"]) == 2
+
+        # 1. subscribe 已注册到 MessageBus
+        subscribers = kernel.message_bus.get_subscribers_of("collector")
+        assert "analyzer" in subscribers
+
+        # 2. 等待两个 agent 都至少完成第一轮（通过睡眠给 event loop 调度时间）
+        #    mock LLM 是瞬时返回的，0.2s 足够 agent 完成 INIT→RUNNING→一轮
+        await asyncio.sleep(0.3)
+
+        collector = kernel.runtime_table["collector"]
+        analyzer = kernel.runtime_table["analyzer"]
+
+        # 验证至少完成了一轮
+        assert collector.round_count >= 1, (
+            f"collector state={collector.state}, rounds={collector.round_count}"
+        )
+        assert analyzer.round_count >= 1, (
+            f"analyzer state={analyzer.state}, rounds={analyzer.round_count}"
+        )
+
+        # 两者都是 continuous，在 receive() 中阻塞:
+        # collector 的队列为空；analyzer 刚消费了 subscribe 消息（round 2）
+        # 如果 analyzer 已 FINISHED（某种原因提前退出），也接受
+
+        # 3. 验证 subscribe 路由：analyzer round_count >= 2 说明它消费了
+        #    collector 通过 subscribe 发送的 TextEvent
+        #    （第 1 轮：entry_prompt, 第 2 轮：subscribe 消息）
+        assert analyzer.round_count >= 2, (
+            f"analyzer should have processed subscribe message from collector"
+        )
+
+        # 4. kill collector（如果还没 FINISHED）→ cascade
+        if collector.state != AgentState.FINISHED:
+            kernel.kill("collector")
+            await asyncio.sleep(0.3)
+
+        # 5. 等待所有 agent FINISHED（+启动 _monitor_quiescence 作为安全网）
+        task_mon = asyncio.create_task(kernel._monitor_quiescence())
+        all_tasks = list(kernel._tasks.values()) + [task_mon]
+        await asyncio.wait_for(asyncio.gather(*all_tasks), timeout=5.0)
+
+        # 6. 验证全部 FINISHED
+        assert collector.state == AgentState.FINISHED, (
+            f"collector state={collector.state}"
+        )
+        assert analyzer.state == AgentState.FINISHED, (
+            f"analyzer state={analyzer.state}"
+        )
+        assert collector.error is None
+        assert analyzer.error is None
+
+        # 7. collector FINISHED 后 subscribe 被 remove_publisher 清理
+        assert kernel.message_bus.get_subscribers_of("collector") == []
+
+        # 8. 验证输出
+        assert "28 files found" in collector.last_output
+
+        # 9. WorkflowFinished 汇总可收集
+        agents_results = []
+        for pid, r in kernel.runtime_table.items():
+            agents_results.append({
+                "pid": pid,
+                "output": r.last_output,
+                "error": r.error,
+                "rounds": r.round_count,
+            })
+        assert len(agents_results) == 2
+        assert any(a["rounds"] >= 1 for a in agents_results)
+
+    try:
+        asyncio.run(_run())
+    finally:
+        os.unlink(path)
