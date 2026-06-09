@@ -106,6 +106,9 @@ class AgentRuntime:
         # 子 agent 追踪（Batch 2+ 使用）
         self.children: list[str] = []
 
+        # workflow 归属（Batch 3+，由 Kernel.spawn 设置）
+        self.workflow_flag: Optional[str] = None
+
         # 编排器（_init_orchestrator() 完成后设置）
         self._orchestrator: Optional[AsyncLifecycleOrchestrator] = None
 

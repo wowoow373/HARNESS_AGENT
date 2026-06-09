@@ -17,6 +17,7 @@ from .types import (
     CommandTalk,
     RuntimeStarted,
     RuntimeStopped,
+    WorkflowFinished,
     SystemCommand,
     SystemEvent,
 )
@@ -74,3 +75,18 @@ class CliConsole:
 
         elif isinstance(event, RuntimeStopped):
             print("[系统] Runtime 停止")
+
+        elif isinstance(event, WorkflowFinished):
+            print(f"[系统] Workflow {event.workflow_flag} 完成:")
+            for agent in event.agents:
+                status = "异常" if agent.get("error") else "正常"
+                print(
+                    f"  {agent['pid']:12} {status}  "
+                    f"{agent['rounds']}轮  {agent['duration']:.1f}s"
+                )
+                output = agent.get("output", "")
+                if output:
+                    truncated = output[:200]
+                    if len(output) > 200:
+                        truncated += "..."
+                    print(f"    → {truncated}")

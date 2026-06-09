@@ -225,14 +225,17 @@ class TestSpawnFromScript:
         finally:
             os.unlink(path)
 
-    def test_subscriptions_stashed(self):
-        """subscribe relationships are stashed in _pending_subscriptions."""
+    def test_subscriptions_registered_to_message_bus(self):
+        """Batch 3: subscribe relationships registered directly to MessageBus."""
         path = _write_workflow_script(agent_count=2, with_subscribe=True)
         try:
             kernel = Kernel(_MockConsole())
             kernel.spawn_from_script(path)
 
-            assert ("analyzer", "collector") in kernel._pending_subscriptions
+            # Subscriptions now go to MessageBus, not _pending_subscriptions
+            subscribers = kernel.message_bus.get_subscribers_of("collector")
+            assert "analyzer" in subscribers
+            assert kernel._pending_subscriptions == []
         finally:
             os.unlink(path)
 

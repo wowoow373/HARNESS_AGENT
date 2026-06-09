@@ -140,8 +140,23 @@ class AgentOutput:
     content: str = ""
 
 
+@dataclass
+class WorkflowFinished:
+    """Mode B: 所有 agent FINISHED，workflow 执行完成。
+
+    run_from_script 在返回前推送此事件到 SystemConsole。
+
+    Attributes:
+        workflow_flag: workflow 标识（如 "wf_001"）。
+        agents: agent 结果列表，每项含 pid/output/error/rounds/duration。
+    """
+    workflow_flag: str = ""
+    agents: list = field(default_factory=list)
+
+
 # Union 类型别名，用于 SystemConsole.send() 签名
 SystemEvent = (
     AgentSpawned | AgentStateChanged | AgentFinished
     | AgentOutput | RuntimeStarted | RuntimeStopped
+    | WorkflowFinished  # Batch 3 新增
 )

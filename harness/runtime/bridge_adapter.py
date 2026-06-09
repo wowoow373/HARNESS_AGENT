@@ -10,7 +10,7 @@ Batch 0 初版：
 - 事件类型过滤：仅 TextEvent/StopEvent 参与路由，
   中间事件（Thinking/ToolCall/ToolResult）直接降级到 SystemConsole
 
-Batch 3 升级：
+Batch 3（已实现）：
 - target=None → message_bus.publish(from_pid, event, on_no_subscriber=...)
 - target=pid → message_bus.direct(target, InternalMessage(...))
 """
@@ -87,30 +87,17 @@ class KernelBridgeAdapter:
         路径分流：
         1. 退出保护：should_exit 为 True → 静默丢弃
         2. 事件类型过滤：非 TextEvent/StopEvent → 降级到 SystemConsole
-        3. 定向投递：target 非空 → 直接入队 input_queues[target]
-        4. 广播（降级路由）：TextEvent → SystemConsole，StopEvent → 丢弃
+        3. 定向投递：target 非空 → MessageBus.direct()
+        4. 广播：target=None → MessageBus.publish()
         """
         if self._runtime.should_exit:
             return  # 退出保护：丢弃"最后一轮污染"
 
-        if target is not None:
-            # 定向投递：直接入队目标 agent 的 input_queue。
-            # 不经过事件类型过滤——任何事件类型都可以定向投递。
-            msg = InternalMessage(
-                from_pid=self._pid,
-                content=event.content if isinstance(event, TextEvent) else "",
-                metadata={"stop": True} if isinstance(event, StopEvent) else {},
-            )
-            self._kernel.input_queues[target].put_nowait(msg)
-            return
-
-        # ── 事件类型分流（仅 target=None 时）──
+        # ── 事件类型分流 ──
         # 仅 TextEvent/StopEvent 参与 MessageBus 路由；
         # 中间事件（Thinking/ToolCall/ToolResult）直接降级到 SystemConsole
         if not isinstance(event, (TextEvent, StopEvent)):
             if isinstance(event, (ThinkingEvent, ToolCallEvent, ToolResultEvent)):
-                # 中间事件没有统一的 .content 属性，
-                # 使用事件自身的字符串表示作为降级内容
                 await self._kernel._console.send(
                     AgentOutput(
                         pid=self._pid,
@@ -119,9 +106,21 @@ class KernelBridgeAdapter:
                 )
             return
 
-        # Batch 0-2 降级路由（无 MessageBus）
-        if isinstance(event, TextEvent):
-            await self._kernel._console.send(
-                AgentOutput(pid=self._pid, content=event.content)
+        if target is not None:
+            # 定向投递：走 MessageBus.direct()
+            msg = InternalMessage(
+                from_pid=self._pid,
+                content=event.content if isinstance(event, TextEvent) else "",
+                metadata={"stop": True} if isinstance(event, StopEvent) else {},
             )
-        # StopEvent → 静默丢弃
+            self._kernel.message_bus.direct(target, msg)
+        else:
+            # pub-sub 路由：走 MessageBus.publish()
+            await self._kernel.message_bus.publish(
+                from_pid=self._pid,
+                event=event,
+                on_no_subscriber=(
+                    self._kernel._console.send
+                    if isinstance(event, TextEvent) else None
+                ),
+            )

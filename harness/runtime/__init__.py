@@ -4,7 +4,7 @@
 
 Batch 1: Runtime + Kernel + AgentRuntime 骨架（单 agent Mode A）。
 Batch 2: Workflow 脚本加载（@agent / subscribe / spawn_from_script）。
-Batch 3: MessageBus + 订阅 + 并发 + 终止（完整多 agent）。
+Batch 3: MessageBus + 订阅 + 并发 + 终止（完整多 agent）。✅
 Batch 4: 系统命令解析 + 信号处理完善。
 """
 
@@ -12,6 +12,7 @@ from .agent_runtime import AgentRuntime, AgentState
 from .bridge_adapter import KernelBridgeAdapter
 from .cli_console import CliConsole
 from .kernel import Kernel
+from .message_bus import MessageBus
 from .runtime import Runtime
 from .signals import create_sigint_handler
 from .types import (
@@ -25,6 +26,7 @@ from .types import (
     RuntimeStopped,
     SystemCommand,
     SystemEvent,
+    WorkflowFinished,
     __EXIT_SENTINEL__,
 )
 from .decorators import agent, subscribe, SubRecord
@@ -62,6 +64,7 @@ __all__ = [
     "AgentFinished",
     "RuntimeStarted",
     "RuntimeStopped",
+    "WorkflowFinished",
     "SystemEvent",
     # Batch 2: Workflow script loading
     "agent",
@@ -74,4 +77,6 @@ __all__ = [
     "TalkToTool",
     "ListAgentsTool",
     "create_runtime_tools",
+    # Batch 3: MessageBus
+    "MessageBus",
 ]

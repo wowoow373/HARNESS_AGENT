@@ -86,9 +86,38 @@ class MockKernel:
     def __init__(self):
         self.input_queues: dict[str, asyncio.Queue] = {}
         self._console = MockConsole()
+        # Batch 3: 添加 message_bus mock，供 KBA.send() 使用
+        self.message_bus = _MockMessageBus(self.input_queues, self._console)
 
     def add_queue(self, pid: str):
         self.input_queues[pid] = asyncio.Queue()
+
+
+class _MockMessageBus:
+    """MessageBus 的最小 mock，供 KBA.send() 测试使用。"""
+
+    def __init__(self, input_queues, console):
+        self._input_queues = input_queues
+        self._console = console
+        self._subscriptions: dict[str, set[str]] = {}
+
+    async def publish(self, from_pid, event, on_no_subscriber=None):
+        """降级路由：无订阅者时走降级路径（复现 Batch 0-2 行为）。"""
+        from harness.interfaces.types import TextEvent
+        from harness.runtime.types import AgentOutput
+
+        subscribers = self._subscriptions.get(from_pid, set())
+        active = {p for p in subscribers if p in self._input_queues}
+        if not active and isinstance(event, TextEvent):
+            if on_no_subscriber is not None:
+                await on_no_subscriber(
+                    AgentOutput(pid=from_pid, content=event.content)
+                )
+
+    def direct(self, target_pid, message):
+        """定向投递 mock —— 直接入队。"""
+        if target_pid in self._input_queues:
+            self._input_queues[target_pid].put_nowait(message)
 
 
 class MockAsyncAdapter:
@@ -1395,18 +1424,23 @@ class TestKernelBridgeAdapterSend:
             assert msg.metadata["stop"] is True
         asyncio.run(_test())
 
-    def test_direct_target_skips_console(self, setup):
-        """定向投递不经过事件类型过滤——直接入队。"""
+    def test_direct_target_intermediate_event_degraded_to_console(self, setup):
+        """Batch 3: 中间事件（ThinkingEvent等）始终降级到 SystemConsole，
+        即使指定了 target——事件类型过滤优先于路由分派。"""
         async def _test():
             kernel, _, kba = setup
 
-            # 定向投递 ThinkingEvent 也应走 target（不降级到 console）
+            # 定向投递 ThinkingEvent 应降级到 console（不经过 target）
             await kba.send(ThinkingEvent(content="thinking..."), target="target")
 
-            # console 不应收到降级输出
-            assert len(kernel._console.events) == 0
-            # target queue 应有消息
-            assert not kernel.input_queues["target"].empty()
+            # console 应收到降级输出
+            assert len(kernel._console.events) >= 1
+            assert any(
+                "ThinkingEvent" in str(e.content)
+                for e in kernel._console.events
+            )
+            # target queue 不应收到（中间事件不参与路由）
+            assert kernel.input_queues["target"].empty()
         asyncio.run(_test())
 
     def test_sender_queue_not_affected(self, setup):

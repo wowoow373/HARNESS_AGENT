@@ -5,7 +5,7 @@
 
 Batch 1: 仅支持 spawn_root（单 agent，Mode A）。
 Batch 2: spawn_from_script（多 agent workflow 脚本加载）。
-Batch 3: MessageBus 集成、默认订阅、级联终止、静默检测完整实现。
+Batch 3: MessageBus + 订阅 + 级联 + 静默检测完整实现。✅
 Batch 4: 系统命令解析（/agents /kill /end /exit /talk）。
 """
 
@@ -66,10 +66,18 @@ class Kernel:
 
         # 基础设施
         self._console = console
-        self.message_bus = None  # Batch 3 替换为 MessageBus
+        # Batch 3: 创建 MessageBus。
+        # input_queues 开始时为空，后续 spawn 中增量添加。
+        # MessageBus 持有引用——新 agent queue 自动可见。
+        from .message_bus import MessageBus
+        self.message_bus = MessageBus(
+            input_queues=self.input_queues,
+            console=console,
+        )
         self._shutdown: bool = False
 
-        # Batch 2-3 预留
+        # Batch 2 遗留：_pending_subscriptions 不再使用。
+        # 订阅关系现在直接注册到 MessageBus（见 spawn_from_script）。
         self._pending_subscriptions: list[tuple[str, str]] = []
 
     # ------------------------------------------------------------------
@@ -132,6 +140,7 @@ class Kernel:
 
         # 7. 记录 workflow
         self.workflow_table["wf_root"] = [pid]
+        runtime.workflow_flag = "wf_root"
 
         logger.info(f"spawn_root: pid='{pid}' created and started")
         return pid
@@ -284,10 +293,12 @@ class Kernel:
                     f"agent. Known: {list(decorators._agent_registry.keys())}"
                 )
 
-        # ── Step 4: Stash subscription relationships ──
+        # ── Step 4: 注册订阅关系到 MessageBus ──
         for sub in decorators._subscription_registry:
-            self._pending_subscriptions.append(
-                (sub.subscriber, sub.publisher)
+            self.message_bus.subscribe(sub.subscriber, sub.publisher)
+            logger.debug(
+                f"spawn_from_script: subscribed "
+                f"'{sub.subscriber}' → '{sub.publisher}'"
             )
 
         # ── Step 5: Create AgentRuntime for each @agent ──
@@ -344,6 +355,7 @@ class Kernel:
                     self._tasks.pop(name, None)
                 self.runtime_table[name] = runtime
                 self.input_queues[name] = asyncio.Queue()
+                runtime.workflow_flag = workflow_flag
 
                 # 5i. Record parent-child relationship
                 if parent is not None:
@@ -465,14 +477,18 @@ class Kernel:
     async def _on_agent_finished(self, runtime: 'AgentRuntime') -> None:
         """agent FINISHED 时的回调（由 Task.done_callback 触发）。
 
-        Batch 1 stub: 仅推送 AgentFinished 事件到 SystemConsole。
-        Batch 3 完整实现: + child_finished 默认订阅 + 级联终止。
-
-        Args:
-            runtime: 已进入 FINISHED 的 AgentRuntime 实例。
+        执行顺序：
+        1. 推送 AgentFinished 到 SystemConsole
+        2. 默认订阅：通知父 agent（child_finished），含去重逻辑
+        3. 级联终止：通过 MessageBus 查询订阅者，推送 __EXIT_SENTINEL__。
+           父 agent 被显式排除（不受级联影响，顶层设计 Section 四.5）。
+        4. 清理订阅表：remove_publisher
         """
+        from .agent_runtime import AgentState
+
         duration = time.time() - runtime.started_at
 
+        # ── 1. 推送 SystemConsole ──
         await self._console.send(AgentFinished(
             pid=runtime.pid,
             result=runtime.last_output,
@@ -485,18 +501,111 @@ class Kernel:
             f"duration={duration:.1f}s error={runtime.error}"
         )
 
+        # ── 2. 默认订阅：通知父 agent ──
+        # 去重：如果父 agent 显式 subscribe 了本 agent，跳过 child_finished。
+        # 父通过 subscribe 流已经收到了子 agent 的输出，无需重复通知。
+        if runtime.parent and runtime.parent.state != AgentState.FINISHED:
+            parent_subscribed = (
+                runtime.parent.pid
+                in self.message_bus.get_subscribers_of(runtime.pid)
+            )
+            if not parent_subscribed:
+                self.send_input(runtime.parent.pid, UserRequest(
+                    text=(
+                        f"[{runtime.pid}] "
+                        f"{'异常退出' if runtime.error else '已完成'}。\n"
+                        f"{runtime.last_output}"
+                    ),
+                    metadata={
+                        "type": "child_finished",
+                        "pid": runtime.pid,
+                        "workflow_flag": runtime.workflow_flag,
+                        "duration": duration,
+                        "error": runtime.error,
+                    },
+                ))
+                logger.debug(
+                    f"_on_agent_finished: child_finished sent to "
+                    f"parent='{runtime.parent.pid}'"
+                )
+            else:
+                logger.debug(
+                    f"_on_agent_finished: parent '{runtime.parent.pid}' "
+                    f"already subscribed to '{runtime.pid}', "
+                    f"skipping child_finished (dedup)"
+                )
+
+        # ── 3. 级联终止：通知显式订阅者 ──
+        # 关键：父 agent 不受级联影响。
+        # 顶层设计 Section 四.5 明确约定。
+        parent_pid = runtime.parent.pid if runtime.parent else None
+        subscribers = self.message_bus.get_subscribers_of(runtime.pid)
+        for sub_pid in subscribers:
+            # 跳过父 agent —— 父不受级联影响
+            if sub_pid == parent_pid:
+                logger.debug(
+                    f"_on_agent_finished: skipping parent '{sub_pid}' "
+                    f"in cascade (parent不受级联影响)"
+                )
+                continue
+
+            sub_runtime = self.runtime_table.get(sub_pid)
+            if sub_runtime and sub_runtime.state not in (
+                AgentState.FINISHED, AgentState.TERMINATING
+            ):
+                sub_runtime.should_exit = True
+                self.input_queues[sub_pid].put_nowait(__EXIT_SENTINEL__)
+                logger.info(
+                    f"_on_agent_finished: cascade sentinel sent "
+                    f"to '{sub_pid}' (subscribed to '{runtime.pid}')"
+                )
+
+        # ── 4. 清理订阅表 ──
+        self.message_bus.remove_publisher(runtime.pid)
+
     async def _monitor_quiescence(self) -> None:
         """静默检测监控协程。
 
-        Batch 1 stub: 只等待所有 agent FINISHED 后返回。
-        Batch 3 完整实现: 检测 idle 后主动推送 sentinel 全体退出。
+        每秒检查一次：如果所有非 FINISHED agent 都处于 idle 状态
+        （在 RUNNING 状态且在 adapter.receive() 中等待），
+        则向全体推送 __EXIT_SENTINEL__ 触发优雅退出。
+
+        Mode B 的核心结束机制：当所有 agent 完成工作进入 WAITING_INPUT，
+        无人会再产生输出时，静默检测自动终止所有 agent。
         """
-        logger.info("_monitor_quiescence: started (stub mode)")
+        from .agent_runtime import AgentState
+
+        logger.info("_monitor_quiescence: started")
         while not self._shutdown:
-            if self.all_finished():
-                logger.info("_monitor_quiescence: all agents FINISHED, exiting")
-                return
             await asyncio.sleep(1)
+
+            non_finished = [
+                r for r in self.runtime_table.values()
+                if r.state != AgentState.FINISHED
+            ]
+
+            if not non_finished:
+                logger.info(
+                    "_monitor_quiescence: all agents FINISHED, exiting"
+                )
+                return
+
+            # 所有非 FINISHED agent 都在等待输入？
+            all_idle = all(
+                r._idle_for_quiescence() for r in non_finished
+            )
+            if all_idle:
+                logger.info(
+                    f"_monitor_quiescence: all {len(non_finished)} "
+                    f"non-finished agent(s) idle, pushing sentinel"
+                )
+                for r in non_finished:
+                    r.should_exit = True
+                    if r.pid in self.input_queues:
+                        self.input_queues[r.pid].put_nowait(
+                            __EXIT_SENTINEL__
+                        )
+                return
 
     async def _handle_system_input(self) -> None:
         """系统输入处理循环。
