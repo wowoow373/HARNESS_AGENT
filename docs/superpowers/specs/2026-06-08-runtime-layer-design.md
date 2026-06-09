@@ -111,7 +111,7 @@ CREATED ──→ INIT ──→ RUNNING ──→ TERMINATING ──→ FINISHE
 | 模式 | 行为 | 适用场景 |
 |------|------|---------|
 | `continuous` | StopEvent 后进入 WAITING_INPUT，等待下一轮输入。只响应外部信号终止 | 交互式对话（Mode A root）、需要持续通信的 workflow agent |
-| `oneshot` | 一轮对话结束（StopEvent 已发送）后自动进入 TERMINATING，不等下一轮输入 | Mode B entry agent、spawn 的子 agent（完成 entry_prompt 即退出） |
+| `oneshot` | 一轮对话结束（StopEvent 已发送）后自动进入 TERMINATING，不等下一轮输入 | 完全未参与 subscribe 关系的独立 agent（如 Mode B 中无依赖关系的 entry agent） |
 
 **模式判定规则**：
 
@@ -1376,7 +1376,7 @@ main.py 退出，exit code 0
 - 测试：加载最小 workflow 脚本，创建多 agent，验证 oneshot 自动结束
 
 > ⚠️ **Batch 2 职责边界（本 batch 明确不做）**：
-> - **`subscribe` 声明仅影响 agent mode**（有订阅关系的 agent 设为 `continuous`，否则 `oneshot`），**不做实际消息路由**——MessageBus 在 Batch 3 才创建
+> - **`subscribe` 声明仅影响 agent mode**（参与 subscribe 的双方——subscriber 和 publisher——均为 `continuous`，否则 `oneshot`），**不做实际消息路由**——MessageBus 在 Batch 3 才创建
 > - **`child_finished` 自动通知不实现**：`_on_agent_finished` 仍为 Batch 1 stub（仅推送 `AgentFinished` 到 SystemConsole），子 agent 完成时父 agent 不会自动收到通知。Batch 2 期间父 agent 需通过 `list_agents` tool 主动轮询或子 agent 通过 `talk_to` 主动汇报
 > - **订阅关系暂存到 `_pending_subscriptions`**，Batch 3 在 MessageBus 创建后统一注册
 > - **级联终止不实现**——属于 Batch 3
