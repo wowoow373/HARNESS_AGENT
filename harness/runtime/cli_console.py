@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from typing import Callable
 
 from .types import (
     AgentFinished,
@@ -29,9 +30,30 @@ class CliConsole:
     receive() 在后台线程读取 stdin，不阻塞 event loop。
     send() 将系统事件格式化为人类可读的文本输出到 stdout。
 
-    Batch 1: receive() 纯文本全部路由到 root agent。
-    Batch 4: 追加 "/" 前缀命令解析（/agents /kill /end /exit /talk）。
+    Batch 4: 支持 / 前缀命令解析，Mode A/B 纯文本路由。
     """
+
+    def __init__(
+        self,
+        mode: str = "mode_a",
+        all_finished_hook: Callable[[], bool] | None = None,
+    ):
+        """初始化 CliConsole。
+
+        Args:
+            mode: "mode_a"（纯文本路由到 root）或 "mode_b"
+                  （纯文本需 /talk 定向）。
+            all_finished_hook: Mode B 下用于判断所有 agent 是否已结束。
+        """
+        self._mode = mode
+        self._all_finished_hook = all_finished_hook
+
+    def set_all_finished_hook(self, hook: Callable[[], bool]) -> None:
+        """设置 all_finished 查询回调（Mode B 下用于判断是否全部完成）。
+
+        通过公开方法注入，而非直接修改 _all_finished_hook 属性。
+        """
+        self._all_finished_hook = hook
 
     async def receive(self) -> SystemCommand:
         """从 stdin 读取一行，路由到 root agent。
