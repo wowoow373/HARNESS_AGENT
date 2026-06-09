@@ -172,21 +172,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _run_with_runtime(harness) -> int:
-    """使用 Runtime 层启动 agent（Mode A 交互式对话）。
-
-    与旧 sync 路径（harness.run()）的区别：
-    - 用户输入通过 SystemConsole（/ 前缀命令可用）
-    - Agent 生命周期由 Kernel + AgentRuntime 管理
-    - 支持 /agents, /kill, /exit 等系统命令
-    - LLM 调用自动 async 化（sync adapter → asyncio.to_thread 桥接）
-
-    Args:
-        harness: 装配好的 Harness 实例。
-        debug: 是否启用 DEBUG 日志。
-
-    Returns:
-        int: 退出码。
-    """
+    """使用 Runtime 层启动 agent（Mode A 交互式对话）。"""
     from harness.runtime.cli_console import CliConsole
     from harness.runtime.runtime import Runtime
 
@@ -202,6 +188,43 @@ def _run_with_runtime(harness) -> int:
         print("\n[系统] 收到中断信号，正在退出...")
     except Exception as e:
         print(f"Error: {e}")
+        return 1
+
+    return 0
+
+
+def _cmd_workflow(args: argparse.Namespace) -> int:
+    """Mode B: 直接启动 workflow 脚本。
+
+    Args:
+        args: 解析后的命令行参数（含 script_path、debug）。
+
+    Returns:
+        int: 退出码。
+    """
+    script_path = args.script_path
+
+    if not os.path.isfile(script_path):
+        print(f"Error: Workflow script '{script_path}' not found.")
+        return 1
+
+    from harness.runtime.cli_console import CliConsole
+    from harness.runtime.runtime import Runtime
+
+    console = CliConsole(mode="mode_b")
+    runtime = Runtime(console)
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting workflow (Mode B): %s", script_path)
+
+    try:
+        runtime.run_from_script(os.path.abspath(script_path))
+    except KeyboardInterrupt:
+        print("\n[系统] 收到中断信号，正在退出...")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
     return 0
@@ -340,6 +363,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Use Runtime layer (Mode A interactive with /commands support)",
     )
 
+    # ---- workflow ----
+    workflow_parser = subparsers.add_parser(
+        "workflow",
+        help="Run a workflow script directly (Mode B)",
+    )
+    workflow_parser.add_argument(
+        "script_path",
+        help="Path to workflow script (.py file with @agent declarations)",
+    )
+    workflow_parser.add_argument(
+        "--debug", "-d",
+        action="store_true",
+        help="Enable DEBUG log level",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -354,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(args)
     elif args.command == "run":
         return _cmd_run(args)
+    elif args.command == "workflow":
+        return _cmd_workflow(args)
     else:
         parser.print_help()
         return 1
