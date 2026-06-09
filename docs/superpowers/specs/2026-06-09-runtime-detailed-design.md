@@ -594,6 +594,13 @@ harness/
 
 **Batch 2 订阅暂存说明**：`Kernel.spawn_from_script()` 在步骤 4 读取 `_subscription_registry`，但此时 MessageBus 还是 `None`（Batch 1 遗留）或空壳。因此 Batch 2 将订阅关系存入 `Kernel._pending_subscriptions: list[tuple[str, str]]`。Batch 3 MessageBus 创建后，Kernel 在 `__init__` 或首次 `spawn_from_script` 时将所有 pending 订阅注册到 MessageBus。对 Batch 2 期间的 agent 行为无影响——因为 Batch 2 还没有 subscribe 声明的 agent 需要通信（所有子 agent 之间的通信在 Batch 3 才启用）。
 
+> ⚠️ **Batch 2 职责边界（本 batch 明确不做）**：
+> - **`subscribe` 声明仅影响 agent mode**（有订阅关系的 agent → `continuous`，否则 → `oneshot`）。**不做消息路由**——MessageBus 在 Batch 3 创建后才能投递消息
+> - **`child_finished` 自动通知不实现**：`_on_agent_finished` 仍为 Batch 1 stub（仅推送 `AgentFinished` 到 SystemConsole），不构造 `child_finished` UserRequest 也不向父 agent 推送。父 agent 需通过 `list_agents` tool 主动查询或子 agent 通过 `talk_to` 主动汇报
+> - **级联终止不实现**——`_on_agent_finished` 不通过 MessageBus 查询订阅者并推送 `__EXIT_SENTINEL__`
+> - **静默检测完整实现不包含**——`_monitor_quiescence` 仍为 Batch 1 stub（仅等 `all_finished()`）
+> - **Mode B `run_from_script` 入口不实现**——属于 Batch 3
+
 #### Batch 3：消息订阅 + 并发 + 终止
 
 ```

@@ -1323,6 +1323,13 @@ main.py 退出，exit code 0
 - `talk_to` tool（定向投递）
 - 测试：加载最小 workflow 脚本，创建多 agent，验证 oneshot 自动结束
 
+> ⚠️ **Batch 2 职责边界（本 batch 明确不做）**：
+> - **`subscribe` 声明仅影响 agent mode**（有订阅关系的 agent 设为 `continuous`，否则 `oneshot`），**不做实际消息路由**——MessageBus 在 Batch 3 才创建
+> - **`child_finished` 自动通知不实现**：`_on_agent_finished` 仍为 Batch 1 stub（仅推送 `AgentFinished` 到 SystemConsole），子 agent 完成时父 agent 不会自动收到通知。Batch 2 期间父 agent 需通过 `list_agents` tool 主动轮询或子 agent 通过 `talk_to` 主动汇报
+> - **订阅关系暂存到 `_pending_subscriptions`**，Batch 3 在 MessageBus 创建后统一注册
+> - **级联终止不实现**——属于 Batch 3
+> - **Mode B `run_from_script` 不实现**——属于 Batch 3
+
 ### Batch 3: 消息订阅 + 并发 + 终止
 
 - MessageBus pub-sub 路由
