@@ -16,6 +16,12 @@ from .types import (
     AgentSpawned,
     AgentStateChanged,
     CommandTalk,
+    CommandKill,
+    CommandListAgents,
+    CommandEndWorkflow,
+    CommandExit,
+    CommandTalkDirect,
+    CommandError,
     RuntimeStarted,
     RuntimeStopped,
     WorkflowFinished,
@@ -56,15 +62,102 @@ class CliConsole:
         self._all_finished_hook = hook
 
     async def receive(self) -> SystemCommand:
-        """从 stdin 读取一行，路由到 root agent。
+        """从 stdin 读取一行，解析为 SystemCommand。
 
-        Returns:
-            CommandTalk(pid="root", text=<输入行>)。
-            EOF 时空字符串 → root agent 的 _should_exit() 检测空 text → 退出。
+        解析规则：
+        1. EOF (readline 返回 "") → CommandExit()
+        2. 以 "/" 开头 → 系统命令解析
+        3. 空输入（仅回车）→ Mode A: 忽略; Mode B: 检查 all_finished
+        4. 纯文本 → Mode A: CommandTalk to root; Mode B: CommandError
         """
-        line = await asyncio.to_thread(sys.stdin.readline)
-        line = line.rstrip("\n")
-        return CommandTalk(pid="root", text=line)
+        while True:
+            line = await asyncio.to_thread(sys.stdin.readline)
+
+            # EOF
+            if not line:
+                return CommandExit()
+
+            text = line.rstrip("\n")
+
+            # 空输入
+            if not text:
+                if self._mode == "mode_a":
+                    continue  # 忽略空白行
+                else:
+                    # Mode B: 检查是否所有 agent 已结束
+                    if (self._all_finished_hook is not None
+                            and self._all_finished_hook()):
+                        return CommandExit()
+                    else:
+                        return CommandError(
+                            command="",
+                            error="纯文本需 /talk <pid> <text> 指定目标。"
+                                  "输入 /agents 查看状态，/exit 退出",
+                        )
+
+            # 系统命令
+            if text.startswith("/"):
+                return self._parse_command(text)
+
+            # 纯文本
+            if self._mode == "mode_a":
+                return CommandTalk(pid="root", text=text)
+            else:
+                return CommandError(
+                    command=text,
+                    error="纯文本需 /talk <pid> <text> 指定目标。"
+                          "输入 /agents 查看状态，/exit 退出",
+                )
+
+    def _parse_command(self, text: str) -> SystemCommand:
+        """解析 / 前缀命令字符串为 SystemCommand。"""
+        parts = text.split(maxsplit=2)
+
+        # /agents, /exit（无参数命令）
+        if parts[0] in ("/agents", "/exit"):
+            if len(parts) > 1:
+                return CommandError(
+                    command=text,
+                    error=f"'{parts[0]}' 不接受额外参数",
+                )
+            if parts[0] == "/agents":
+                return CommandListAgents()
+            else:
+                return CommandExit()
+
+        # /kill <pid>
+        if parts[0] == "/kill":
+            if len(parts) < 2:
+                return CommandError(
+                    command=text, error="用法: /kill <pid>"
+                )
+            return CommandKill(pid=parts[1])
+
+        # /end <flag>
+        if parts[0] == "/end":
+            if len(parts) < 2:
+                return CommandError(
+                    command=text, error="用法: /end <flag>"
+                )
+            return CommandEndWorkflow(flag=parts[1])
+
+        # /talk <pid> <text>
+        if parts[0] == "/talk":
+            if len(parts) < 2:
+                return CommandError(
+                    command=text, error="用法: /talk <pid> <text>"
+                )
+            if len(parts) < 3:
+                return CommandError(
+                    command=text,
+                    error="用法: /talk <pid> <text> (缺少消息文本)",
+                )
+            return CommandTalkDirect(pid=parts[1], text=parts[2])
+
+        # 未知命令
+        return CommandError(
+            command=text, error=f"未知命令: '{parts[0]}'"
+        )
 
     async def send(self, event: SystemEvent) -> None:
         """按事件类型格式化输出到 stdout。
