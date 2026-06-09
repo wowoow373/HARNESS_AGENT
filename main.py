@@ -226,6 +226,7 @@ def _fallback_assemble():
     from harness.components.tool.default_system_tool_provider import (
         DefaultSystemToolProvider,
     )
+    from harness.adapters.llm_adapter import MinimalLLMAdapter
     from harness.interfaces import (
         ContextAssembler,
         GuideProvider,
@@ -266,10 +267,16 @@ def _fallback_assemble():
         SystemToolProvider, DefaultSystemToolProvider()
     )
 
-    logger = logging.getLogger(__name__)
-    logger.info("Fallback assembly: no LLM configured (call_llm=None)")
+    # LLM Adapter — 自动从 .env 或环境变量读取配置
+    llm = MinimalLLMAdapter()
 
-    return Harness.from_container(container, call_llm=None)
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "Fallback assembly: %s @ %s (model=%s)",
+        llm.__class__.__name__, llm.base_url, llm.model,
+    )
+
+    return Harness.from_container(container, call_llm=llm)
 
 
 # ---------------------------------------------------------------------------
