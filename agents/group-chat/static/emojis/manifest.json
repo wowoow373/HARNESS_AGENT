@@ -1,0 +1,34 @@
+{
+  "emojis": [
+    {
+      "id": "laugh",
+      "filename": "laugh.jpg",
+      "description": "大笑、开心、觉得好笑的时候",
+      "scenarios": ["用户讲笑话", "有趣的事情", "轻松愉快的对话"]
+    },
+    {
+      "id": "cool",
+      "filename": "cool.png",
+      "description": "酷、帅、赞、认可",
+      "scenarios": ["用户做了厉害的事", "赞同观点", "觉得很棒"]
+    },
+    {
+      "id": "happy",
+      "filename": "happy.jpg",
+      "description": "开心、高兴、满足",
+      "scenarios": ["用户分享好消息", "完成任务", "愉快的时刻"]
+    },
+    {
+      "id": "cry",
+      "filename": "cry.jpg",
+      "description": "哭泣、悲伤、感动、无奈",
+      "scenarios": ["用户遇到难过的事", "感动的瞬间", "无奈的情况"]
+    },
+    {
+      "id": "cute",
+      "filename": "cute.gif",
+      "description": "可爱、卖萌、温柔",
+      "scenarios": ["安慰用户", "表达温柔", "可爱的回应"]
+    }
+  ]
+}

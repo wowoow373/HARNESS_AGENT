@@ -107,7 +107,7 @@ Runtime(CliConsole()).run(harness)  # Mode A 启动
 | [sdd/](sdd/) | 贡献者 | 软件设计文档 |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | 贡献者 | Runtime 层设计文档 |
 | [examples/](examples/) | 开发者 | 可运行示例 |
-| [agents/](agents/) | 所有人 | 领域 Agent 展示（chat-web、trajectory-analyst） |
+| [agents/](agents/) | 所有人 | 领域 Agent 展示（chat-web、group-chat、trajectory-analyst） |
 
 ### 示例
 
@@ -150,6 +150,11 @@ pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 920 tests
   - 自定义消费级工具：web_search、weather
   - 自定义 emoji 渲染系统 + before_assemble Hook 约束
   - 完整测试套件（4 模块，1444 行）
+- ✅ **group-chat** — 多人实时群聊 Agent（[agents/group-chat/](agents/group-chat/)）
+  - 多 Agent + 用户共处一个聊天房间，差异化性格与响应节奏
+  - 原子化输出切分实现自然抢话/插话，选择式回复 + 潜水机制
+  - 3 个自定义组件：`FlexibleGroupChatInputAdapter`、`AtomicOutputAdapter`、`SelectiveGroupChatAssembler`
+  - FastAPI + WebSocket 网页前端，5 个自定义表情渲染
 - 🔜 **trajectory-analyst** — 轨迹分析元 Agent（计划中）
 
 **计划中（v2.0）** 🔨
