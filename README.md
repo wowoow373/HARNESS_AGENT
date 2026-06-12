@@ -124,6 +124,16 @@ Runtime(CliConsole()).run(harness)  # Mode A 启动
 
 ---
 
+## Showcases
+
+功能演示放在独立分支上，master 只保留框架核心：
+
+| 分支 | 说明 |
+|------|------|
+| [`showcase/agents`](https://github.com/wowoow373/HARNESS_AGENT/tree/showcase/agents) | WebSocket 网页聊天助手 + 多人实时群聊 Agent |
+
+---
+
 ## 测试
 
 ```bash
