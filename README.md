@@ -14,6 +14,7 @@
 |------|------|---------|
 | **chat-web** | [`agents/chat-web/`](agents/chat-web/) | 把命令行交互替换成 WebSocket 网页聊天，支持自定义工具、emoji 渲染和会话记忆。 |
 | **group-chat** | [`agents/group-chat/`](agents/group-chat/) | 多 Agent 与人类用户共处一个聊天室，展现差异化性格、自然抢话/插话、选择式回复与潜水机制。 |
+| **trajectory-analyst** | `agents/trajectory-analyst/`（计划中） | 轨迹分析元 Agent，读取 Harness 自身的开发/运行轨迹，辅助框架自我迭代。 |
 
 两个案例都基于同一套 Harness Runtime 接口，通过替换 `InputAdapter` / `ContextAssembler` / 添加自定义组件完成。
 
@@ -83,6 +84,23 @@ python server.py
 - 用户可随时加入对话
 
 详细说明：[agents/group-chat/README.md](agents/group-chat/README.md)
+
+---
+
+## trajectory-analyst：轨迹分析元 Agent（计划中）
+
+一个用于**辅助 Harness 自我迭代**的元 Agent。它的核心职责是读取和分析 Harness 框架自身的开发轨迹与运行轨迹——包括代码变更、设计决策、Runtime 运行日志、Agent 行为记录等——并据此提出改进建议、生成下一阶段的实现计划或自动修复简单问题。
+
+### 目标能力
+
+- 读取 git 历史、PR 记录、设计文档，理解框架演进方向
+- 分析 Runtime 运行轨迹，定位多 Agent 协作中的异常或低效模式
+- 根据现有组件接口和约束，生成可落地的改造方案
+- 作为 Harness 自我改进的入口，推动框架从“被人类维护”走向“被 Agent 辅助维护”
+
+### 当前状态
+
+🔜 尚未实现，处于设计阶段。本案例将验证 Harness Runtime 是否足够自举：让 Agent 读取自身文档、理解自身架构、并产出可执行的改进计划。
 
 ---
 
