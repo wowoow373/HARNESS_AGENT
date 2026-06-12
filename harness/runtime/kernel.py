@@ -36,14 +36,26 @@ def _resolve_adapter(container, pid: str, kernel: 'Kernel', runtime: 'AgentRunti
     User can register a custom AsyncInputAdapter in their workflow script's
     @agent assembly function — e.g. a batch-window adapter for slow readers.
     If none registered, the default KernelBridgeAdapter is used.
+
+    Extension point: If the resolved adapter has an ``_inject_kernel_context``
+    method (duck-typed), it is called with (pid, kernel, runtime). This allows
+    custom adapters (e.g. FlexibleGroupChatInputAdapter) to create their
+    internal KernelBridgeAdapter after the kernel context is available.
     """
     from ..interfaces.async_input_adapter import AsyncInputAdapter
     from .bridge_adapter import KernelBridgeAdapter
 
     try:
-        return container.resolve(AsyncInputAdapter)
+        adapter = container.resolve(AsyncInputAdapter)
     except Exception:
         return KernelBridgeAdapter(pid=pid, kernel=kernel, runtime=runtime)
+
+    # Inject kernel context into custom adapters that support it.
+    # Duck-typed: any adapter with _inject_kernel_context gets the injection.
+    if hasattr(adapter, '_inject_kernel_context'):
+        adapter._inject_kernel_context(pid=pid, kernel=kernel, runtime=runtime)
+
+    return adapter
 
 
 def make_async_llm(sync_call_llm):
@@ -297,13 +309,18 @@ class Kernel:
                 f"No @agent declarations found in '{script_path}'"
             )
 
+        # Known virtual publishers (not declared as @agent, but valid
+        # as publish targets — e.g. "user" for group chat human input).
+        _VIRTUAL_PUBLISHERS = {"user"}
+
         for sub in decorators._subscription_registry:
             if sub.subscriber not in decorators._agent_registry:
                 raise ValueError(
                     f"subscribe('{sub.subscriber}') references unknown "
                     f"agent. Known: {list(decorators._agent_registry.keys())}"
                 )
-            if sub.publisher not in decorators._agent_registry:
+            if (sub.publisher not in decorators._agent_registry
+                    and sub.publisher not in _VIRTUAL_PUBLISHERS):
                 raise ValueError(
                     f"subscribe(...).to('{sub.publisher}') references unknown "
                     f"agent. Known: {list(decorators._agent_registry.keys())}"

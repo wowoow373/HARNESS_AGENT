@@ -24,4 +24,6 @@ venv/
 
 # Runtime session data
 memory/episodic/session_*.md
+memory/group_chat/
 agents/chat-web/memory/
+agents/group-chat/__pycache__/

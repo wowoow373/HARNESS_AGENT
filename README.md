@@ -1,169 +1,118 @@
-# Harness Agent Template
+# Harness Agent Template — `showcase/agents`
 
-> 面向个人开发者与小型团队的**模块化 Agent 框架模板**。
+> 这是 `showcase/agents` 分支，用于演示基于 Harness Runtime 构建的**领域 Agent**。
 >
-> 核心理念：**框架只定义接口契约与编排流程，所有具体行为由你通过「实现接口 + 依赖注入」来自定义。**
->
-> **v2.0** — 新增 Runtime 多 Agent 协作层 | 920 tests passing
+> 框架整体架构、接口契约和核心组件说明请查看 [`master` 分支的 README](https://github.com/wowoow373/HARNESS_AGENT/blob/master/README.md)。
 
 ---
 
-## 为什么选 Harness？
+## 本分支演示什么？
 
-**1. 任意替换模块 → 配置出你的领域 Agent。**
-每个组件只有接口契约，没有实现绑定。换 MemoryBackend、换 InputAdapter、换 Sensor——都是一行注册代码的事。
+在 master 的 Runtime 多 Agent 能力之上，本分支实现了两个可直接运行的网页级 Agent 案例：
 
-**2. 多 Agent Runtime — 进程模型 + 消息通信。**
-`spawn_workflow` 一键创建多个子 Agent，`subscribe` 声明 Agent 间消息路由。支持 pipeline、fan-out、debate、群聊等任意拓扑。用户通过 `/agents` `/kill` `/talk` 实时管理。
+| 案例 | 路径 | 核心效果 |
+|------|------|---------|
+| **chat-web** | [`agents/chat-web/`](agents/chat-web/) | 把命令行交互替换成 WebSocket 网页聊天，支持自定义工具、emoji 渲染和会话记忆。 |
+| **group-chat** | [`agents/group-chat/`](agents/group-chat/) | 多 Agent 与人类用户共处一个聊天室，展现差异化性格、自然抢话/插话、选择式回复与潜水机制。 |
 
-**3. Agent 自举：读接口、装配模块、启动子 Agent。**
-Protocol 接口的 docstring 是 AI 可读的契约文档，组件 README 是"怎么替换"的操作手册。Agent 可以自己读这些文档，写实现，配 YAML，启动任意配置的子 Agent。
-
-**4. 一句话启动。**
-```bash
-# Mode A: 交互式对话
-python main.py run --runtime
-
-# Mode B: 直接启动 Workflow 脚本
-python main.py workflow examples/debate_workflow.py
-```
+两个案例都基于同一套 Harness Runtime 接口，通过替换 `InputAdapter` / `ContextAssembler` / 添加自定义组件完成。
 
 ---
 
-## 快速开始
+## chat-web：WebSocket 网页聊天助手
+
+一个可在浏览器里对话的单 Agent，效果类似 ChatGPT 网页版。
+
+### 运行
 
 ```bash
-# 1. 配置 LLM
-echo 'base_url = https://api.openai.com/v1
-api-key = sk-your-key
-model = gpt-4o' > harness/config/.env
-
-# 2. 交互模式
-python main.py run --runtime
-> 你好
-[root] 你好！有什么可以帮你的？
-
-# 3. Workflow 模式
-python main.py workflow examples/debate_workflow.py
+cd agents/chat-web
+python server.py
+# 打开 http://localhost:8000
 ```
 
-```python
-# 开发者：装配自定义 Agent
-from harness.di import Harness
-from harness.core.container import DIContainer
-from harness.interfaces import InputAdapter, MemoryBackend, ContextAssembler
-from harness.adapters.llm_adapter import MinimalLLMAdapter
-from harness.runtime.cli_console import CliConsole
-from harness.runtime.runtime import Runtime
-from harness.components.context_assembler.simple_assembler import SimpleAssembler
-from harness.components.memory_backend.md_memory import MdMemory
+### 关键替换
 
-container = DIContainer()
-container.register(MemoryBackend, MdMemory(path="./memory"))
-container.register(ContextAssembler, SimpleAssembler(max_history=50))
+| 模块 | 默认实现 | 本案例替换为 | 目的 |
+|------|---------|-------------|------|
+| `AsyncInputAdapter` | `KernelBridgeAdapter` | `WebSocketAdapter` | 接收/发送 WebSocket 消息 |
+| `SystemToolProvider` | `DefaultSystemToolProvider` | 自定义 `WebToolProvider` | 注入 `web_search`、`weather` |
+| Hook | 无 | `before_assemble` emoji 约束 | 限制 LLM 只能输出预定义 `:name:` 表情 |
 
-harness = Harness.from_container(container, call_llm=MinimalLLMAdapter())
-Runtime(CliConsole()).run(harness)  # Mode A 启动
-```
+### 效果
+
+- 浏览器实时收发消息
+- 支持 `:happy:` `:laugh:` `:cool:` `:cry:` `:cute:` 五种表情渲染
+- 可调用 `web_search` / `weather` 工具
+
+详细说明：[agents/chat-web/README.md](agents/chat-web/README.md)
 
 ---
 
-## 架构一览
+## group-chat：多人实时群聊 Agent
 
-```
-你的插件（全部可替换）
-  InputAdapter  GuideProvider  ContextAssembler
-  MemoryBackend  Sensor  SystemToolProvider
-  MCPAdapter  MCPHandler  Hook
-          ▲
-          │ 实现接口 + 注册到容器
-          │
-  ┌───────┴──────────────────────────────────────┐
-  │        Harness 微内核（不修改）               │
-  │  DIContainer  LifecycleOrchestrator          │
-  │  ToolRouter    HookManager                   │
-  ├──────────────────────────────────────────────┤
-  │        Runtime 层（新增）                     │
-  │  AgentRuntime  Kernel  MessageBus            │
-  │  SystemConsole  CliConsole                   │
-  └──────────────────────────────────────────────┘
+一个多 Agent + 人类用户共处的聊天室，演示 Agent 之间的动态互动。
+
+### 运行
+
+```bash
+cd agents/group-chat
+python server.py
+# 打开 http://localhost:8000
 ```
 
-**三阶段生命周期**：初始化 → 多轮循环（LLM ↔ Tool）→ 结束（Sensor 评估 + 记忆沉淀）
+### 关键设计
 
-**Runtime 多 Agent**：Agent 状态机（CREATED→INIT→RUNNING→TERMINATING→FINISHED）、Kernel 进程表 + 消息总线、subscribe 流式通信、Workflow 脚本化
+| 能力 | 实现方式 |
+|------|---------|
+| 差异化响应节奏 | 每个 Agent 配置不同的 `min_wait` / `max_wait` / `jitter` |
+| 自然抢话/插话 | `AtomicOutputAdapter` 把回复按句子原子化切分，中间插入随机延迟 |
+| 选择式回复 | `SelectiveGroupChatAssembler` 让 LLM 先选消息再回复，支持 `选择 0` 表示潜水 |
+| 人类输入 | Kernel 允许 `subscribe(...).to("user")`，无需把用户声明为 `@agent` |
+
+### 自定义组件
+
+- `harness/components/input_adapter/flexible_group_chat_input_adapter.py` — 带缓冲窗口的输入适配器
+- `harness/components/input_adapter/atomic_output_adapter.py` — 原子化输出切分适配器
+- `harness/components/context_assembler/selective_group_chat_assembler.py` — 选择式群聊上下文组装器
+
+### 效果
+
+- 多个 Agent 同时在线，性格不同
+- Agent 会等待、插话、潜水
+- 用户可随时加入对话
+
+详细说明：[agents/group-chat/README.md](agents/group-chat/README.md)
 
 ---
 
-## 文档导航
+## 对核心框架的改动
 
-| 文档 | 面向 | 内容 |
-|------|------|------|
-| **[docs/runtime/architecture.md](docs/runtime/architecture.md)** | **所有人** | **Runtime 层架构概览：进程模型、通信、Workflow** |
-| **[docs/runtime/io-guide.md](docs/runtime/io-guide.md)** | **用户** | **命令参考、交互模式、常见场景** |
-| [docs/FRAMEWORK.md](docs/FRAMEWORK.md) | 开发者 | 完整框架指南：四大支柱、装配、生命周期、扩展 |
-| [harness/interfaces/](harness/interfaces/) | 开发者 + Agent | Protocol 接口定义 |
-| [harness/components/](harness/components/) | 开发者 + Agent | 组件文档与默认实现 |
-| [sdd/](sdd/) | 贡献者 | 软件设计文档 |
-| [docs/superpowers/specs/](docs/superpowers/specs/) | 贡献者 | Runtime 层设计文档 |
-| [examples/](examples/) | 开发者 | 可运行示例 |
-| [agents/](agents/) | 所有人 | 领域 Agent 展示（chat-web、trajectory-analyst） |
+本分支为了支持上述案例，对框架核心做了最小化扩展（这些改动已单独整理到可合入 master 的 PR）：
 
-### 示例
-
-| 文件 | 说明 |
+| 文件 | 改动 |
 |------|------|
-| [examples/runtime_agent.py](examples/runtime_agent.py) | Runtime Mode A 交互式 Agent |
-| [examples/minimal_agent.py](examples/minimal_agent.py) | 经典 sync 路径示例（不依赖 Runtime） |
-| [examples/debate_workflow.py](examples/debate_workflow.py) | 三人辩论 Workflow 脚本 |
+| `harness/runtime/kernel.py` | `_resolve_adapter` 支持向自定义适配器注入 `pid`/`kernel`/`runtime`；`spawn_from_script` 允许 `subscribe(...).to("user")` 虚拟发布者。 |
 
-### Agent 指导文件
-
-| 文件 | 说明 |
-|------|------|
-| [docs/runtime/AGENTS_EXAMPLE.md](docs/runtime/AGENTS_EXAMPLE.md) | Runtime 工具 few-shot 示例（复制为 AGENTS.md 即可启用） |
+所有案例专属组件（`agents/*`、三个 group-chat 组件、设计文档）保留在本分支，不进入 master。
 
 ---
 
 ## 测试
 
 ```bash
-pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 920 tests
+# 框架核心测试
+pytest tests/ --ignore=tests/test_real_llm_trace.py -v
+
+# chat-web 测试
+pytest agents/chat-web/tests/ -v
+
+# group-chat e2e 测试
+pytest agents/group-chat/test_e2e.py -v
 ```
-
----
-
-## 路线图
-
-**已完成（v2.0）** 🎉
-
-- ✅ Batch-01~11：内核 + 全部组件 + DI 装配 (v1.0)
-- ✅ **Runtime 层**：多 Agent 进程模型、MessageBus pub-sub、Workflow 脚本化
-- ✅ 系统命令：`/agents` `/kill` `/end` `/talk` `/exit`
-- ✅ Mode A（交互式）+ Mode B（Workflow 直接启动）
-- ✅ KBA DI 可注册：支持自定义 I/O 策略（batch window / immediate 等）
-
-**领域 Agent Showcase（showcase/agents 分支）** 🌐
-
-- ✅ **chat-web** — WebSocket 网页聊天助手（[agents/chat-web/](agents/chat-web/)）
-  - `InputAdapter` 替换：CliAdapter → WebSocketAdapter
-  - 自定义消费级工具：web_search、weather
-  - 自定义 emoji 渲染系统 + before_assemble Hook 约束
-  - 完整测试套件（4 模块，1444 行）
-- 🔜 **trajectory-analyst** — 轨迹分析元 Agent（计划中）
-
-**计划中（v2.0）** 🔨
-
-- 🔜 KBA I/O 策略可定制（batch_window、batch_count 模式）
-- 🔜 子 Agent 日志可观测（read_log tool）
-- 🔜 WebSocket / HTTP SystemConsole
 
 ---
 
 ## 许可证
 
 MIT
-
----
-
-> **Harness Agent Template** — 不是最强的 Agent 框架，但是**最容易裁剪、扩展和自举**的 Agent 框架模板。
