@@ -14,6 +14,10 @@ if _CS_PATH not in sys.path:
     sys.path.insert(0, _CS_PATH)
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: tests that require real LLM API calls")
+
+
 @pytest.fixture
 def test_corpus():
     """Minimal QA corpus for testing."""
