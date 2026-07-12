@@ -8,15 +8,16 @@
 
 ## 本分支演示什么？
 
-在 master 的 Runtime 多 Agent 能力之上，本分支实现了三个可直接运行的 Agent 案例：
+在 master 的 Runtime 多 Agent 能力之上，本分支实现了四个 Agent 案例：
 
 | 案例 | 路径 | 核心效果 |
 |------|------|---------|
 | **chat-web** | [`agents/chat-web/`](agents/chat-web/) | 把命令行交互替换成 WebSocket 网页聊天，支持自定义工具、emoji 渲染和会话记忆。 |
 | **group-chat** | [`agents/group-chat/`](agents/group-chat/) | 多 Agent 与人类用户共处一个聊天室，展现差异化性格、自然抢话/插话、选择式回复与潜水机制。 |
+| **customer-service** | [`agents/customer-service/`](agents/customer-service/) | 客服场景多意图 Agent：验证式知识问答 + 分层任务记忆 + 错误驱动边界提炼。 |
 | **trajectory-analyst** | `agents/trajectory-analyst/`（计划中） | 轨迹分析元 Agent，读取 Harness 自身的开发/运行轨迹，辅助框架自我迭代。 |
 
-三个案例都基于同一套 Harness Runtime 接口，通过替换 `InputAdapter` / `ContextAssembler` / 添加自定义组件完成。
+四个案例都基于同一套 Harness Runtime 接口，通过替换 `InputAdapter` / `ContextAssembler` / 添加自定义组件完成。
 
 ---
 
