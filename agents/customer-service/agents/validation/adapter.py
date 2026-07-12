@@ -30,6 +30,9 @@ class ValidationAdapter:
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
             state = self._memory.read("loop", "qa_state")
+            if state is None:
+                await self._kba.send(event, target)
+                return
             graph = SubGraphManager.from_dict(state["graph"])
             prev_node_count = graph.node_count()
 

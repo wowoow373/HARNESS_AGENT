@@ -25,13 +25,17 @@ class EvidenceAdapter:
 
     async def receive(self) -> UserRequest:
         request = await self._kba.receive()
-        if request.metadata.get("direction"):
-            self._current_direction = tuple(request.metadata["direction"])
+        meta = request.metadata or {}
+        if meta.get("direction"):
+            self._current_direction = tuple(meta["direction"])
         return request
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
             state = self._memory.read("loop", "qa_state")
+            if state is None:
+                await self._kba.send(event, target)
+                return
             graph = SubGraphManager.from_dict(state["graph"])
 
             if self._current_direction:

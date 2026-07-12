@@ -31,7 +31,7 @@ class DirectionAdapter:
 
     async def receive(self) -> UserRequest:
         raw = await self._kba.receive()
-        meta = raw.metadata
+        meta = raw.metadata or {}
 
         if meta.get("task") == "generate_directions":
             self._current_question = meta["question"]
