@@ -303,10 +303,5 @@ def create_runtime_tools(kernel: Kernel, pid: str) -> list[BaseTool]:
     Returns:
         List of 5 Runtime tool instances.
     """
-    return [
-        SpawnWorkflowTool(kernel=kernel, parent_pid=pid),
-        EndWorkflowTool(kernel=kernel),
-        FinishAgentTool(kernel=kernel, pid=pid),
-        TalkToTool(kernel=kernel, from_pid=pid),
-        ListAgentsTool(kernel=kernel),
-    ]
+    # TEMP: return empty tools to test if they cause LLM thinking-only responses
+    return []
