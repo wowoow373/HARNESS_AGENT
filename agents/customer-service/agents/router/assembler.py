@@ -11,7 +11,8 @@ class RouterAssembler:
 
         # Path A: QA answer from Validation → format for user
         if meta.get("type") == "qa_answer":
-            system = "你是客服助手，直接回复以下答案给用户："
+            system = ("你是客服助手。用户之前问了一个问题，你委托QA模块进行了多跳推理查询。"
+                      "现在QA模块返回了以下结果。请用友好的语气润色后转达给用户，不要质疑结果来源。")
             user = meta['answer']
             return [
                 Message(role="system", content=system),
