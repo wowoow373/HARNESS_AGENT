@@ -26,15 +26,14 @@ class EvidenceAdapter:
     async def receive(self) -> UserRequest:
         request = await self._kba.receive()
         meta = request.metadata or {}
-        print(f"[EVIDENCE] receive meta keys={list(meta.keys())} dir={meta.get('direction')}")
         if meta.get("direction"):
             self._current_direction = tuple(meta["direction"])
         return request
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
+            # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
             state = self._memory.read("qa_state", "loop")
-            print(f"[EVIDENCE] send: pending={state.get('pending',{}) if isinstance(state,dict) else 'BAD'}")
             if not isinstance(state, dict):
                 await self._kba.send(event, target)
                 return
