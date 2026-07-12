@@ -23,7 +23,7 @@ class ValidationAssembler:
 
     def assemble(self, ctx: AssemblyContext) -> List[Message]:
         # Guard: entry_prompt — no QA state in memory yet
-        state = self._memory.read("loop", "qa_state")
+        state = self._memory.read("qa_state", "loop")
         if state is None:
             return [
                 Message(role="system", content="等待任务..."),
