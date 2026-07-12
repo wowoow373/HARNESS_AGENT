@@ -56,9 +56,8 @@ class DirectionAdapter:
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
-            print(f"[DIRECTION] send: content_len={len(event.content)}, content={event.content[:200]}")
             remaining_q, candidates = parse_draft_v3_output(event.content)
-            print(f"[DIRECTION] parsed: {len(candidates)} candidates, remaining_q={remaining_q[:80] if remaining_q else 'NONE'}")
+            print(f"[DIRECTION] send: {len(candidates)} candidates, remaining_q={remaining_q[:80] if remaining_q else 'NONE'}")
 
             state = self._memory.read("qa_state", "loop")
             if not isinstance(state, dict):
