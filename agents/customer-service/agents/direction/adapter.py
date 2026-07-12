@@ -1,24 +1,8 @@
 """DirectionAdapter — multi-node iteration + LLM output parsing + Evidence dispatch."""
-from harness.interfaces.types import TextEvent, ThinkingEvent, UserRequest
+from harness.interfaces.types import TextEvent, UserRequest
 from harness.interfaces.memory_backend import MemoryBackend
 from harness.runtime.bridge_adapter import KernelBridgeAdapter
 from shared.prompts import parse_draft_v3_output
-
-
-class _ThinkingCaptureKBA:
-    """Wraps KBA to capture ThinkingEvent content for fallback parsing."""
-
-    def __init__(self, pid, kernel, runtime, adapter):
-        self._kba = KernelBridgeAdapter(pid, kernel, runtime)
-        self._adapter = adapter
-
-    async def receive(self):
-        return await self._kba.receive()
-
-    async def send(self, event, target=None):
-        if isinstance(event, ThinkingEvent):
-            self._adapter._last_thinking = event.content
-        await self._kba.send(event, target)
 
 
 class DirectionAdapter:
@@ -40,10 +24,9 @@ class DirectionAdapter:
         self._accumulated_tasks = []
         self._current_question = ""
         self._current_node_id = None
-        self._last_thinking = ""
 
     def _inject_kernel_context(self, pid, kernel, runtime):
-        self._kba = _ThinkingCaptureKBA(pid, kernel, runtime, self)
+        self._kba = KernelBridgeAdapter(pid, kernel, runtime)
         self._kernel = kernel
 
     async def receive(self) -> UserRequest:
@@ -73,13 +56,8 @@ class DirectionAdapter:
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
-            content = event.content
-            # ★ Some models return draft output in thinking, not text.
-            # Fall back to last cached thinking if text is empty.
-            if not content and hasattr(self, '_last_thinking'):
-                content = self._last_thinking
-            print(f"[DIRECTION] send: content_len={len(content)}, content={content[:200]}")
-            remaining_q, candidates = parse_draft_v3_output(content)
+            print(f"[DIRECTION] send: content_len={len(event.content)}, content={event.content[:200]}")
+            remaining_q, candidates = parse_draft_v3_output(event.content)
             print(f"[DIRECTION] parsed: {len(candidates)} candidates, remaining_q={remaining_q[:80] if remaining_q else 'NONE'}")
 
             state = self._memory.read("qa_state", "loop")

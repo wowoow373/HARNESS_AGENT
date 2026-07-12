@@ -1,23 +1,9 @@
 """EvidenceAdapter — parse LLM triple output + sync barrier check."""
-from harness.interfaces.types import TextEvent, ThinkingEvent, UserRequest
+from harness.interfaces.types import TextEvent, UserRequest
 from harness.interfaces.memory_backend import MemoryBackend
 from harness.runtime.bridge_adapter import KernelBridgeAdapter
 from shared.prompts import parse_final
 from shared.subgraph_manager import SubGraphManager
-
-
-class _ThinkingCaptureKBA:
-    def __init__(self, pid, kernel, runtime, adapter):
-        self._kba = KernelBridgeAdapter(pid, kernel, runtime)
-        self._adapter = adapter
-
-    async def receive(self):
-        return await self._kba.receive()
-
-    async def send(self, event, target=None):
-        if isinstance(event, ThinkingEvent):
-            self._adapter._last_thinking = event.content
-        await self._kba.send(event, target)
 
 
 class EvidenceAdapter:
@@ -32,10 +18,9 @@ class EvidenceAdapter:
         self._kernel = None
         self._memory = memory
         self._current_direction = None
-        self._last_thinking = ""
 
     def _inject_kernel_context(self, pid, kernel, runtime):
-        self._kba = _ThinkingCaptureKBA(pid, kernel, runtime, self)
+        self._kba = KernelBridgeAdapter(pid, kernel, runtime)
         self._kernel = kernel
 
     async def receive(self) -> UserRequest:
@@ -48,9 +33,6 @@ class EvidenceAdapter:
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
-            content = event.content
-            if not content:
-                content = self._last_thinking
             state = self._memory.read("qa_state", "loop")
             print(f"[EVIDENCE] send: pending={state.get('pending',{}) if isinstance(state,dict) else 'BAD'}")
             if not isinstance(state, dict):
@@ -60,7 +42,7 @@ class EvidenceAdapter:
 
             if self._current_direction:
                 subj, rel = self._current_direction
-                parsed = parse_final(content)
+                parsed = parse_final(event.content)
 
                 if parsed and parsed != "INVALID":
                     subj_out, rel_out, obj, select_idx = parsed
