@@ -34,8 +34,9 @@ class DirectionAdapter:
         meta = raw.metadata or {}
 
 
+        print(f"[DIRECTION] receive meta keys={list(meta.keys())} task={meta.get('task')}")
         if meta.get("task") == "generate_directions":
-            self._current_question = meta["question"]
+            print(f"[DIRECTION] GOT QA TASK: q={meta['question']}, node={meta.get('expandable_nodes',[{}])[0].get('node_id')}")
             self._pending_nodes = list(meta["expandable_nodes"])
             self._accumulated_tasks = []
             first_node = self._pending_nodes.pop(0)
@@ -56,10 +57,11 @@ class DirectionAdapter:
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
             remaining_q, candidates = parse_draft_v3_output(event.content)
+            print(f"[DIRECTION] send: {len(candidates)} candidates, remaining_q={remaining_q[:80] if remaining_q else 'NONE'}")
 
-            # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
             state = self._memory.read("qa_state", "loop")
             if not isinstance(state, dict):
+                print(f"[DIRECTION] BAD STATE: {type(state).__name__} — skipping send")
                 await self._kba.send(event, target)
                 return
             tried = state.get("tried_candidates", {}).get(self._current_node_id, [])
