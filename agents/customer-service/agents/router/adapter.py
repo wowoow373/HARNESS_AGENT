@@ -25,14 +25,21 @@ class RouterAdapter:
 
     async def receive(self) -> UserRequest:
         request = await self._kba.receive()
+        # ★ Skip entry_prompt (has workflow_flag, no "from") — only save real user messages
         if request.text and not request.metadata.get("type"):
-            self._current_user_message = request.text
+            if "workflow_flag" not in request.metadata:
+                self._current_user_message = request.text
         return request
 
     async def send(self, event, target=None):
         parsed = None
         if isinstance(event, TextEvent):
             parsed = self._parse_intent(event.content)
+
+            # ★ Skip entry_prompt responses — no real user message yet
+            if not self._current_user_message:
+                await self._kba.send(event, target)
+                return
 
             if parsed["intent"] == "qa":
                 state = create_initial_state(question=self._current_user_message)
