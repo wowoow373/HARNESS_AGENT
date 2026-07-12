@@ -42,8 +42,10 @@ class RouterAdapter:
                 return
 
             if parsed["intent"] == "qa":
+                print(f"[ROUTER-DEBUG] QA intent, writing state with question={self._current_user_message}")
                 state = create_initial_state(question=self._current_user_message)
                 self._memory.write("qa_state", state, "loop")
+                print(f"[ROUTER-DEBUG] state written, sending to direction")
                 self._kernel.send_input("direction", UserRequest(
                     text="",
                     metadata={
