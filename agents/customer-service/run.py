@@ -116,39 +116,39 @@ async def chat(req: ChatRequest):
     # kernel.send_input is synchronous (Queue.put_nowait), safe from any thread
     kernel.send_input("router", UserRequest(text=req.text))
 
-    # Collect outputs — poll with increasing sleep
+    # Collect outputs with timeout
     all_messages = []
-    router_finished = False
-    deadline = time.time() + 120
+    deadline = time.time() + 60  # hard max
+    idle_deadline = time.time() + 8  # return after 8s of silence
+    last_count = 0
 
     while time.time() < deadline:
-        drained_any = False
         for pid in list(kernel.runtime_table.keys()):
             msgs = console.drain(pid)
             for m in msgs:
                 all_messages.append({"pid": pid, "content": m})
-                drained_any = True
 
-        if drained_any:
-            deadline = time.time() + 15
+        current_count = len(all_messages)
+        if current_count > last_count:
+            idle_deadline = time.time() + 8  # extend on activity
+            last_count = current_count
+        elif time.time() > idle_deadline and current_count > 0:
+            break  # silent for 8s with messages → done
 
-        # Check router state
-        router = kernel.runtime_table.get("router")
-        if router and hasattr(router, 'state') and str(router.state) == "AgentState.FINISHED":
-            if router_finished:
-                time.sleep(0.3)
-                for pid in list(kernel.runtime_table.keys()):
-                    msgs = console.drain(pid)
-                    for m in msgs:
-                        all_messages.append({"pid": pid, "content": m})
-                break
-            router_finished = True
-            deadline = time.time() + 3
+        time.sleep(0.2)
 
-        time.sleep(0.1)
+    # Final drain
+    for pid in list(kernel.runtime_table.keys()):
+        msgs = console.drain(pid)
+        for m in msgs:
+            all_messages.append({"pid": pid, "content": m})
 
-    # Extract final answer: last router message
-    router_msgs = [m["content"] for m in all_messages if m["pid"] == "router"]
+    # Extract final answer: last non-tool, non-thinking router message
+    router_msgs = [m["content"] for m in all_messages
+                   if m["pid"] == "router"
+                   and not m["content"].startswith("[ThinkingEvent]")
+                   and not m["content"].startswith("[ToolCallEvent]")
+                   and not m["content"].startswith("[ToolResultEvent]")]
     final = router_msgs[-1] if router_msgs else "No response"
 
     return {"answer": final, "trace": all_messages}
