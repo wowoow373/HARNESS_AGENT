@@ -1,0 +1,74 @@
+"""RouterAdapter — parse LLM intent output and route to downstream agents."""
+import re
+from harness.interfaces.types import TextEvent, UserRequest
+from harness.runtime.bridge_adapter import KernelBridgeAdapter
+from harness.interfaces.memory_backend import MemoryBackend
+from shared.state_schema import create_initial_state
+
+
+class RouterAdapter:
+    """KBA wrapper. Parses LLM intent classification in send() and routes.
+
+    Constructor-injected:
+    - memory: MemoryBackend for initializing QA shared state
+    """
+
+    def __init__(self, memory: MemoryBackend):
+        self._kba = None
+        self._kernel = None
+        self._memory = memory
+        self._current_user_message = ""
+
+    def _inject_kernel_context(self, pid, kernel, runtime):
+        self._kba = KernelBridgeAdapter(pid, kernel, runtime)
+        self._kernel = kernel
+
+    async def receive(self) -> UserRequest:
+        request = await self._kba.receive()
+        if request.text and not request.metadata.get("type"):
+            self._current_user_message = request.text
+        return request
+
+    async def send(self, event, target=None):
+        if isinstance(event, TextEvent):
+            parsed = self._parse_intent(event.content)
+
+            if parsed["intent"] == "qa":
+                state = create_initial_state(question=self._current_user_message)
+                self._memory.write("qa_state", state, "loop")
+
+                self._kernel.send_input("direction", UserRequest(
+                    text="",
+                    metadata={
+                        "task": "generate_directions",
+                        "question": self._current_user_message,
+                        "expandable_nodes": [{
+                            "node_id": "ROOT",
+                            "confirmed_triples": [],
+                            "evidence_passages": [],
+                        }],
+                    }
+                ))
+
+            elif parsed["intent"] == "task":
+                event.content = self._current_user_message
+
+            elif parsed["intent"] == "fallback":
+                pass
+
+        await self._kba.send(event, target)
+
+    @staticmethod
+    def _parse_intent(text: str) -> dict:
+        intent = "fallback"
+        confidence = "0.0"
+        slots = "{}"
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("INTENT:"):
+                intent = line.split(":", 1)[1].strip().lower()
+            elif line.startswith("CONFIDENCE:"):
+                confidence = line.split(":", 1)[1].strip()
+            elif line.startswith("SLOTS:"):
+                slots = line.split(":", 1)[1].strip()
+        return {"intent": intent, "confidence": float(confidence), "slots": slots}
