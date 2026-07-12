@@ -41,7 +41,7 @@ class DirectionAdapter:
             first_node = self._pending_nodes.pop(0)
             self._current_node_id = first_node["node_id"]
             return UserRequest(
-                text="",
+                text="[TASK] " + meta["question"],
                 metadata={
                     "task": "generate_directions",
                     "question": meta["question"],
@@ -85,7 +85,7 @@ class DirectionAdapter:
                 next_node = self._pending_nodes.pop(0)
                 self._current_node_id = next_node["node_id"]
                 self._kernel.send_input("direction", UserRequest(
-                    text="",
+                    text="[TASK]",
                     metadata={
                         "task": "generate_directions",
                         "question": self._current_question,
@@ -105,11 +105,11 @@ class DirectionAdapter:
 
                     for task in self._accumulated_tasks:
                         self._kernel.send_input("evidence", UserRequest(
-                            text="", metadata=task,
+                            text="[TASK]", metadata=task,
                         ))
                 else:
                     self._kernel.send_input("validation", UserRequest(
-                        text="", metadata={"trigger": "direction_empty"},
+                        text="[TASK]", metadata={"trigger": "direction_empty"},
                     ))
 
         await self._kba.send(event, target)

@@ -48,7 +48,7 @@ class RouterAdapter:
                 state = create_initial_state(question=self._current_user_message)
                 self._memory.write("qa_state", state, "loop")
                 self._kernel.send_input("direction", UserRequest(
-                    text="",
+                    text="[TASK]",
                     metadata={
                         "task": "generate_directions",
                         "question": self._current_user_message,

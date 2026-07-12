@@ -53,7 +53,7 @@ class ValidationAdapter:
                 state["sources"] = graph.get_sources()
                 self._memory.write("qa_state", state, "loop")
                 self._kernel.send_input("router", UserRequest(
-                    text="", metadata={
+                    text="[TASK]", metadata={
                         "type": "qa_answer",
                         "question": state["question"],
                         "answer": answer,
@@ -87,7 +87,7 @@ class ValidationAdapter:
                     })
 
                 self._kernel.send_input("direction", UserRequest(
-                    text="", metadata={
+                    text="[TASK]", metadata={
                         "task": "generate_directions",
                         "question": state["question"],
                         "expandable_nodes": expandable_nodes,
@@ -102,7 +102,7 @@ class ValidationAdapter:
         state["answer"] = "抱歉，暂时无法回答这个问题，请咨询人工客服。"
         self._memory.write("qa_state", state, "loop")
         self._kernel.send_input("router", UserRequest(
-            text="", metadata={
+            text="[TASK]", metadata={
                 "type": "qa_answer",
                 "question": state["question"],
                 "answer": state["answer"],

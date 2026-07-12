@@ -63,7 +63,7 @@ class EvidenceAdapter:
 
                 if state["pending"]["received"] >= state["pending"]["total"]:
                     self._kernel.send_input("validation", UserRequest(
-                        text="",
+                        text="[TASK]",
                         metadata={
                             "task": "validate_graph",
                             "question": state["question"],
