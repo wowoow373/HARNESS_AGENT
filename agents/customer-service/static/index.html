@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Service Agent</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #f1f5f9; height: 100vh; display: flex; flex-direction: column; }
+  .header { padding: 12px 20px; background: #1e293b; color: #fff;
+            font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .status { font-size: 12px; padding: 2px 10px; border-radius: 10px; }
+  .status.connected { background: #16a34a; }
+  .status.disconnected { background: #dc2626; }
+  .main { flex: 1; display: flex; overflow: hidden; }
+  .chat-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .msg.user { align-self: flex-end; background: #3b82f6; color: #fff; }
+  .msg.agent { align-self: flex-start; background: #fff; color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .reasoning-panel { width: 380px; background: #fff; border-left: 1px solid #e2e8f0;
+                     overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .round-group { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+  .round-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+                  background: #f8fafc; cursor: pointer; font-weight: 600; font-size: 13px; user-select: none; }
+  .round-indicator { font-size: 10px; transition: transform 0.2s; }
+  .round-group.open .round-indicator { transform: rotate(90deg); }
+  .round-body { display: none; padding: 8px 12px; }
+  .round-group.open .round-body { display: block; }
+  .phase-card { margin: 4px 0; border-radius: 6px; overflow: hidden; font-size: 12px; }
+  .phase-card.direction { background: #fef9c3; border: 1px solid #fde047; }
+  .phase-card.evidence { background: #dcfce7; border: 1px solid #86efac; }
+  .phase-card.validation { background: #f3e8ff; border: 1px solid #d8b4fe; }
+  .phase-header { padding: 4px 10px; font-weight: 600; }
+  .phase-body { padding: 6px 10px; }
+  .candidate-item, .evidence-item, .decision-item { padding: 3px 0; font-family: monospace; font-size: 12px; }
+  .evidence-item.valid { color: #166534; }
+  .evidence-item.invalid { color: #dc2626; text-decoration: line-through; }
+  .decision-item.keep { color: #166534; }
+  .decision-item.discard { color: #991b1b; }
+  .source-text { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .answer-box { margin-top: 6px; padding: 8px 12px; background: #eff6ff;
+                border: 1px solid #93c5fd; border-radius: 6px; font-size: 13px; font-weight: 500; color: #1e40af; }
+  .input-area { display: flex; gap: 8px; padding: 12px 16px; background: #fff; border-top: 1px solid #e2e8f0; }
+  .input-area input { flex: 1; border: 1px solid #e2e8f0; border-radius: 20px; padding: 10px 16px; font-size: 14px; outline: none; }
+  .input-area input:focus { border-color: #3b82f6; }
+  .input-area button { border: none; border-radius: 20px; padding: 10px 20px; background: #3b82f6;
+                       color: #fff; font-weight: 600; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="header">
+  <span>🎧 Customer Service Agent</span>
+  <span class="status disconnected" id="status">断开</span>
+</div>
+<div class="main">
+  <div class="chat-panel">
+    <div class="messages" id="messages"></div>
+    <div class="input-area">
+      <input id="input" placeholder="输入问题... (如: 改签规则是什么？)" onkeydown="if(event.key==='Enter')send()">
+      <button onclick="send()">发送</button>
+    </div>
+  </div>
+  <div class="reasoning-panel" id="reasoning"></div>
+</div>
+<script>
+const WS_URL = 'ws://localhost:8000/ws';
+let ws = null;
+
+function setStatus(ok) {
+  const s = document.getElementById('status');
+  s.textContent = ok ? '已连接' : '断开';
+  s.className = 'status ' + (ok ? 'connected' : 'disconnected');
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => setStatus(true);
+  ws.onclose = () => { setStatus(false); setTimeout(connect, 3000); };
+  ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
+}
+
+function addMessage(cls, text) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  document.getElementById('messages').appendChild(d);
+  document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+}
+
+function escape(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function findOrCreateRound(roundNum) {
+  const id = 'round-' + roundNum;
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'round-group open';
+    el.id = id;
+    el.innerHTML = `<div class="round-header" onclick="this.parentElement.classList.toggle('open')">
+      <span class="round-indicator">▶</span> Round ${roundNum}
+    </div><div class="round-body"></div>`;
+    document.getElementById('reasoning').appendChild(el);
+  }
+  return el.querySelector('.round-body');
+}
+
+function addPhaseCard(roundNum, type, title, bodyHtml) {
+  const body = findOrCreateRound(roundNum);
+  const card = document.createElement('div');
+  card.className = 'phase-card ' + type;
+  card.innerHTML = `<div class="phase-header">${escape(title)}</div><div class="phase-body">${bodyHtml}</div>`;
+  body.appendChild(card);
+}
+
+function handleEvent(data) {
+  switch (data.type) {
+    case 'intent_classified':
+      addMessage('agent', `[Router] 意图: ${data.data.intent} (置信度: ${data.data.confidence})`);
+      break;
+    case 'direction_output':
+      addPhaseCard(data.round, 'direction', '🔍 方向生成',
+        data.data.candidates.map(c => `<div class="candidate-item">${escape(c[0])} | ${escape(c[1])} | ?</div>`).join(''));
+      break;
+    case 'evidence_output':
+      const cls = data.data.valid ? 'valid' : 'invalid';
+      const icon = data.data.valid ? '✅' : '❌';
+      const triple = data.data.triple
+        ? `${escape(data.data.triple.subj)} | ${escape(data.data.triple.rel)} | ${escape(data.data.triple.obj)}`
+        : data.data.reason || 'INVALID';
+      const srcHtml = data.data.source_passage
+        ? `<div class="source-text">来源: ${escape(data.data.source_passage)}</div>` : '';
+      addPhaseCard(data.round, 'evidence', '📎 证据锚定',
+        `<div class="evidence-item ${cls}">${icon} ${triple}${srcHtml}</div>`);
+      break;
+    case 'validation_output':
+      const decisions = Object.entries(data.data.decisions)
+        .map(([nid, d]) => `<div class="decision-item ${d.toLowerCase()}">${escape(nid)}: ${d}</div>`).join('');
+      const answerHtml = data.data.answer
+        ? `<div class="answer-box">💡 ${escape(data.data.answer)}</div>` : '';
+      addPhaseCard(data.round, 'validation', '🛡️ 全局校验', decisions + answerHtml);
+      break;
+    case 'qa_answer':
+      addMessage('agent', data.data.answer);
+      if (data.data.sources && data.data.sources.length) {
+        addMessage('agent', '📚 参考来源:\n' + data.data.sources.map(s => '· ' + s).join('\n'));
+      }
+      break;
+    case 'qa_fallback':
+      addMessage('agent', data.data.answer || '抱歉，暂时无法回答这个问题。');
+      break;
+  }
+}
+
+function send() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || !ws) return;
+  addMessage('user', text);
+  ws.send(JSON.stringify({text}));
+  input.value = '';
+}
+
+connect();
+</script>
+</body>
+</html>
