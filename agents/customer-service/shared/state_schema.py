@@ -19,6 +19,8 @@ def read_state(memory) -> dict | None:
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
+        if raw.strip() in ("", "null"):
+            return None
         try:
             return json.loads(raw.replace("'", '"'))
         except json.JSONDecodeError:
@@ -29,6 +31,11 @@ def read_state(memory) -> dict | None:
 def write_state(memory, state: dict) -> None:
     """Write QA state as JSON string to memory."""
     memory.write("qa_state", json.dumps(state, ensure_ascii=False), "loop")
+
+
+def clear_state(memory) -> None:
+    """Clear QA state from memory (prevent stale state on restart)."""
+    write_state(memory, None)
 
 
 def create_initial_state(

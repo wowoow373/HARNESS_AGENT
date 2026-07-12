@@ -60,9 +60,7 @@ class DirectionAdapter:
 
             # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
             state = read_state(self._memory)
-            print(f"[DIR] state={type(state).__name__}, candidates={len(candidates)}, accum={len(self._accumulated_tasks)}")
             if not isinstance(state, dict):
-                print(f"[DIR] BAD STATE, skipping dispatch")
                 await self._kba.send(event, target)
                 return
             tried = state.get("tried_candidates", {}).get(self._current_node_id, [])
@@ -100,16 +98,14 @@ class DirectionAdapter:
                 ))
             else:
                 if self._accumulated_tasks:
-                    print(f"[DIR] dispatching {len(self._accumulated_tasks)} tasks to evidence")
-                    state["pending"]["total"] = len(self._accumulated_tasks)
+                state["pending"]["total"] = len(self._accumulated_tasks)
                     state["pending"]["received"] = 0
                     state["pending"]["results"] = []
                     state["phase"] = "evidence"
                     write_state(self._memory, state)
 
                     for task in self._accumulated_tasks:
-                        print(f"[DIR] → evidence: dir={task['direction']}")
-                        self._kernel.send_input("evidence", UserRequest(
+                    self._kernel.send_input("evidence", UserRequest(
                             text="[TASK]", metadata=task,
                         ))
                 else:

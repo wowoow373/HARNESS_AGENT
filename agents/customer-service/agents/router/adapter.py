@@ -3,7 +3,7 @@ import re
 from harness.interfaces.types import TextEvent, UserRequest
 from harness.runtime.bridge_adapter import KernelBridgeAdapter
 from harness.interfaces.memory_backend import MemoryBackend
-from shared.state_schema import create_initial_state, write_state
+from shared.state_schema import clear_state, create_initial_state, write_state
 
 
 class RouterAdapter:
@@ -18,6 +18,7 @@ class RouterAdapter:
         self._kernel = None
         self._memory = memory
         self._current_user_message = ""
+        self._is_qa_answer = False
 
     def _inject_kernel_context(self, pid, kernel, runtime):
         self._kba = KernelBridgeAdapter(pid, kernel, runtime)
@@ -26,6 +27,8 @@ class RouterAdapter:
     async def receive(self) -> UserRequest:
         request = await self._kba.receive()
         meta = request.metadata or {}
+        # Track whether this is a QA answer (always publish these)
+        self._is_qa_answer = (meta.get("type") == "qa_answer")
         # Save user message text for routing. Skip:
         # - entry_prompt (has workflow_flag)
         # - QA answer back from Validation (type=qa_answer)
@@ -45,6 +48,7 @@ class RouterAdapter:
                 return
 
             if parsed["intent"] == "qa":
+                clear_state(self._memory)  # prevent stale state from previous run
                 state = create_initial_state(question=self._current_user_message)
                 write_state(self._memory, state)
                 self._kernel.send_input("direction", UserRequest(
@@ -70,8 +74,9 @@ class RouterAdapter:
                     text=self._current_user_message,
                 ))
 
-        # ★ Only publish to console if not routed via send_input
-        if parsed is None or parsed["intent"] == "qa":
+        # ★ Publish to console: QA intent OR QA answer from Validation
+        is_answer = isinstance(event, TextEvent) and getattr(event, 'content', '')
+        if parsed is None or parsed["intent"] == "qa" or self._is_qa_answer:
             await self._kba.send(event, target)
 
     @staticmethod
