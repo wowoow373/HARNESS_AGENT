@@ -11,7 +11,7 @@ class RouterAssembler:
 
         # Path A: QA answer from Validation → format for user
         if meta.get("type") == "qa_answer":
-            system = "你是客服助手，将以下答案用友好的语气告诉用户："
+            system = "你是客服助手，直接回复以下答案给用户："
             user = meta['answer']
             return [
                 Message(role="system", content=system),
