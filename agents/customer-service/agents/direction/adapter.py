@@ -59,9 +59,7 @@ class DirectionAdapter:
 
             # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
             state = self._memory.read("qa_state", "loop")
-            print(f"[DIR] send: state={type(state).__name__}, candidates={candidates}, accum={len(self._accumulated_tasks)}")
             if not isinstance(state, dict):
-                print(f"[DIR] BAD STATE, skipping dispatch")
                 await self._kba.send(event, target)
                 return
             tried = state.get("tried_candidates", {}).get(self._current_node_id, [])
