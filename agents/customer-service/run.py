@@ -1,6 +1,4 @@
-"""Customer Service Agent — unified entry point.
-
-Starts Kernel + 6-agent workflow + FastAPI server in one process.
+"""Customer Service Agent — single-process, single-loop entry point.
 
 Usage:
     python agents/customer-service/run.py
@@ -10,11 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import threading
 import time
 from pathlib import Path
+from contextlib import asynccontextmanager
 
-# ── Path setup ──
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -32,30 +29,32 @@ from harness.runtime.cli_console import CliConsole
 from harness.runtime.types import AgentOutput
 from harness.interfaces.types import UserRequest
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Capturing console
 # ═══════════════════════════════════════════════════════════════════════════
 
 class CapturingConsole:
-    """Forwards to CliConsole + captures AgentOutput into thread-safe queues."""
+    """Forwards to CliConsole + captures AgentOutput for /chat endpoint."""
 
     def __init__(self):
         self._cli = CliConsole(mode='mode_b')
-        self.output_queues: dict[str, asyncio.Queue] = {}
-        self._pending = {}  # pid → list of content strings (thread-safe)
-
-    def make_queue(self, pid: str):
-        self._pending[pid] = []
+        self._pending = {}  # pid → list of content (accessed from same event loop)
 
     def drain(self, pid: str) -> list[str]:
         msgs = list(self._pending.get(pid, []))
         self._pending[pid] = []
         return msgs
 
+    def drain_all(self) -> dict[str, list[str]]:
+        result = {pid: list(msgs) for pid, msgs in self._pending.items()}
+        for pid in self._pending:
+            self._pending[pid] = []
+        return result
+
     async def send(self, event):
         if isinstance(event, AgentOutput):
-            if event.pid in self._pending:
-                self._pending[event.pid].append(event.content)
+            self._pending.setdefault(event.pid, []).append(event.content)
         await self._cli.send(event)
 
     async def receive(self):
@@ -63,26 +62,53 @@ class CapturingConsole:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Kernel context
+# Global state (same event loop → thread-safe)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class KernelContext:
-    """Holds kernel + console refs for the /chat endpoint."""
-
-    def __init__(self):
-        self.kernel: Kernel | None = None
-        self.console: CapturingConsole | None = None
-        self.ready = threading.Event()
-
-
-_ctx = KernelContext()
+_kernel: Kernel | None = None
+_console: CapturingConsole | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # App
 # ═══════════════════════════════════════════════════════════════════════════
 
-app = FastAPI(title="Customer Service Agent", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start Kernel + workflow on startup, clean up on shutdown."""
+    global _kernel, _console
+
+    console = CapturingConsole()
+    kernel = Kernel(console)
+    _kernel = kernel
+    _console = console
+
+    result = kernel.spawn_from_script(
+        str(Path(__file__).parent / "customer_service_workflow.py")
+    )
+    print(f"[system] Workflow spawned: {result['workflow_flag']} "
+          f"with {len(result['agents'])} agents")
+
+    # Start agent tasks as background tasks (same event loop)
+    for pid, task in kernel._tasks.items():
+        asyncio.create_task(_monitor_agent(pid, task))
+
+    yield  # Server is running
+
+    # Shutdown: kill all agents
+    for pid in list(kernel.runtime_table.keys()):
+        kernel.kill(pid)
+
+
+async def _monitor_agent(pid: str, task: asyncio.Task):
+    """Wait for agent task to complete, log errors."""
+    try:
+        await task
+    except Exception as e:
+        print(f"[{pid}] agent error: {e}")
+
+
+app = FastAPI(title="Customer Service Agent", version="0.1.0", lifespan=lifespan)
 static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
@@ -102,48 +128,44 @@ async def root():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    if not _ctx.ready.is_set():
-        return {"error": "System not initialized yet, wait a moment..."}
+    if _kernel is None or _console is None:
+        return {"error": "System not initialized"}
 
-    kernel = _ctx.kernel
-    console = _ctx.console
+    # Clear previous captures
+    for pid in _kernel.runtime_table:
+        _console.drain(pid)
 
-    # Register capture for all agents
-    for pid in kernel.runtime_table:
-        console.make_queue(pid)
-
-    # Send message to router
-    # kernel.send_input is synchronous (Queue.put_nowait), safe from any thread
-    kernel.send_input("router", UserRequest(text=req.text))
+    # Send message to router (same event loop → thread-safe)
+    _kernel.send_input("router", UserRequest(text=req.text))
 
     # Collect outputs with timeout
     all_messages = []
-    deadline = time.time() + 60  # hard max
-    idle_deadline = time.time() + 8  # return after 8s of silence
+    deadline = time.time() + 60
+    idle_deadline = time.time() + 8
     last_count = 0
 
     while time.time() < deadline:
-        for pid in list(kernel.runtime_table.keys()):
-            msgs = console.drain(pid)
+        drained = _console.drain_all()
+        for pid, msgs in drained.items():
             for m in msgs:
                 all_messages.append({"pid": pid, "content": m})
 
         current_count = len(all_messages)
         if current_count > last_count:
-            idle_deadline = time.time() + 8  # extend on activity
+            idle_deadline = time.time() + 8
             last_count = current_count
         elif time.time() > idle_deadline and current_count > 0:
-            break  # silent for 8s with messages → done
+            break
 
-        time.sleep(0.2)
+        await asyncio.sleep(0.2)
 
     # Final drain
-    for pid in list(kernel.runtime_table.keys()):
-        msgs = console.drain(pid)
+    drained = _console.drain_all()
+    for pid, msgs in drained.items():
         for m in msgs:
             all_messages.append({"pid": pid, "content": m})
 
-    # Extract final answer: last non-tool, non-thinking router message
+    # Extract final answer
     router_msgs = [m["content"] for m in all_messages
                    if m["pid"] == "router"
                    and not m["content"].startswith("[ThinkingEvent]")
@@ -155,59 +177,10 @@ async def chat(req: ChatRequest):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Main
-# ═══════════════════════════════════════════════════════════════════════════
-
-async def _run_kernel():
-    """Run the Kernel + workflow in asyncio."""
-    console = CapturingConsole()
-    kernel = Kernel(console)
-    _ctx.kernel = kernel
-    _ctx.console = console
-
-    result = kernel.spawn_from_script(
-        str(Path(__file__).parent / "customer_service_workflow.py")
-    )
-    print(f"[system] Workflow spawned: {result['workflow_flag']} "
-          f"with {len(result['agents'])} agents")
-
-    _ctx.ready.set()
-
-    # Wait for all agent tasks
-    tasks = list(kernel._tasks.values())
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-
-def _run_event_loop():
-    """Run asyncio event loop in background thread."""
-    asyncio.run(_run_kernel())
-
 
 if __name__ == "__main__":
     import uvicorn
-
-    # Start Kernel event loop in background
-    loop_thread = threading.Thread(target=_run_event_loop, daemon=True, name="kernel")
-    loop_thread.start()
-
-    # Wait for kernel to be ready
-    if not _ctx.ready.wait(timeout=30):
-        print("ERROR: Kernel failed to start within 30s")
-        sys.exit(1)
-
     print("=" * 50)
     print("  Customer Service Agent")
     print("=" * 50)
-    print()
-    print("  Frontend:  http://localhost:8000")
-    print("  Chat API:  POST http://localhost:8000/chat")
-    print()
-    print('  Test: curl -X POST http://localhost:8000/chat \\')
-    print('        -H "Content-Type: application/json" \\')
-    print('        -d \'{"text":"改签规则是什么？"}\'')
-    print()
-    print("  Press Ctrl+C to stop")
-    print()
-
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
