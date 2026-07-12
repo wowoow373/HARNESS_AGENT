@@ -64,13 +64,13 @@ class ValidationAdapter:
                 # Answer sent to Router — workflow continues until user exits
 
             elif state["round"] >= state["max_hops"]:
-                self._emit_fallback(state, "max_hops")
+                await self._emit_fallback(state, "max_hops")
 
             elif not expandable:
-                self._emit_fallback(state, "no_expandable")
+                await self._emit_fallback(state, "no_expandable")
 
             elif new_node_count == 0:
-                self._emit_fallback(state, "no_progress")
+                await self._emit_fallback(state, "no_progress")
 
             else:
                 state["round"] += 1
@@ -98,16 +98,9 @@ class ValidationAdapter:
 
         await self._kba.send(event, target)
 
-    def _emit_fallback(self, state: dict, reason: str):
+    async def _emit_fallback(self, state: dict, reason: str):
         state["phase"] = "done"
         state["answer"] = "抱歉，暂时无法回答这个问题，请咨询人工客服。"
         write_state(self._memory, state)
-        self._kernel.send_input("router", UserRequest(
-            text="[TASK]", metadata={
-                "type": "qa_answer",
-                "question": state["question"],
-                "answer": state["answer"],
-                "sources": [],
-            },
-        ))
-        # Fallback answer sent to Router — workflow continues until user exits
+        await self._kba.send(TextEvent(content=state["answer"]))
+        # Emitted directly to console — no Router processing needed
