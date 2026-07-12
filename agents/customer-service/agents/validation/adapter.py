@@ -61,7 +61,7 @@ class ValidationAdapter:
                         "sources": state["sources"],
                     },
                 ))
-                self._kernel.end_workflow(self._runtime.workflow_flag)
+                # Answer sent to Router — workflow continues until user exits
 
             elif state["round"] >= state["max_hops"]:
                 self._emit_fallback(state, "max_hops")
@@ -110,4 +110,4 @@ class ValidationAdapter:
                 "sources": [],
             },
         ))
-        self._kernel.end_workflow(self._runtime.workflow_flag)
+        # Fallback answer sent to Router — workflow continues until user exits
