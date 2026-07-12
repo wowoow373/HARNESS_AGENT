@@ -2,6 +2,7 @@
 from harness.interfaces.types import AssemblyContext, Message
 from harness.interfaces.memory_backend import MemoryBackend
 from typing import List
+from shared.state_schema import read_state
 from shared.prompts import (
     CORE_VALIDATOR_SYSTEM_PROMPT_EVIDENCE_ONLY,
     build_core_validator_content_from_merger,
@@ -23,7 +24,7 @@ class ValidationAssembler:
 
     def assemble(self, ctx: AssemblyContext) -> List[Message]:
         # Guard: entry_prompt — no QA state in memory yet
-        state = self._memory.read("qa_state", "loop")
+        state = read_state(self._memory)
         if not isinstance(state, dict):
             return [
                 Message(role="system", content="等待任务..."),

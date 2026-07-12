@@ -4,6 +4,7 @@ from harness.interfaces.memory_backend import MemoryBackend
 from harness.runtime.bridge_adapter import KernelBridgeAdapter
 from shared.prompts import parse_final
 from shared.subgraph_manager import SubGraphManager
+from shared.state_schema import read_state, write_state
 
 
 class EvidenceAdapter:
@@ -33,7 +34,7 @@ class EvidenceAdapter:
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
             # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
-            state = self._memory.read("qa_state", "loop")
+            state = read_state(self._memory)
             if not isinstance(state, dict):
                 await self._kba.send(event, target)
                 return
@@ -59,7 +60,7 @@ class EvidenceAdapter:
 
                 state["pending"]["received"] += 1
                 state["pending"]["results"].append(result)
-                self._memory.write("qa_state", state, "loop")
+                write_state(self._memory, state)
 
                 if state["pending"]["received"] >= state["pending"]["total"]:
                     self._kernel.send_input("validation", UserRequest(

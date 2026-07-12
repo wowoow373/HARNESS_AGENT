@@ -4,6 +4,7 @@ from harness.interfaces.memory_backend import MemoryBackend
 from harness.runtime.bridge_adapter import KernelBridgeAdapter
 from shared.prompts import parse_validator_decisions, parse_validator_answer
 from shared.subgraph_manager import SubGraphManager
+from shared.state_schema import read_state, write_state
 
 
 class ValidationAdapter:
@@ -30,7 +31,7 @@ class ValidationAdapter:
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
             # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
-            state = self._memory.read("qa_state", "loop")
+            state = read_state(self._memory)
             if not isinstance(state, dict):
                 await self._kba.send(event, target)
                 return
@@ -51,7 +52,7 @@ class ValidationAdapter:
                 state["phase"] = "done"
                 state["answer"] = answer
                 state["sources"] = graph.get_sources()
-                self._memory.write("qa_state", state, "loop")
+                write_state(self._memory, state)
                 self._kernel.send_input("router", UserRequest(
                     text="[TASK]", metadata={
                         "type": "qa_answer",
@@ -76,7 +77,7 @@ class ValidationAdapter:
                 state["expandable"] = expandable
                 state["phase"] = "direction"
                 state["pending"] = {"total": 0, "received": 0, "results": []}
-                self._memory.write("qa_state", state, "loop")
+                write_state(self._memory, state)
 
                 expandable_nodes = []
                 for nid in expandable:
@@ -100,7 +101,7 @@ class ValidationAdapter:
     def _emit_fallback(self, state: dict, reason: str):
         state["phase"] = "done"
         state["answer"] = "抱歉，暂时无法回答这个问题，请咨询人工客服。"
-        self._memory.write("qa_state", state, "loop")
+        write_state(self._memory, state)
         self._kernel.send_input("router", UserRequest(
             text="[TASK]", metadata={
                 "type": "qa_answer",

@@ -1,4 +1,5 @@
 """QA loop shared state schema — creation, validation, and helpers."""
+import json
 from shared.subgraph_manager import SubGraphManager
 
 
@@ -8,6 +9,26 @@ VALID_PHASES = {"idle", "direction", "evidence", "validation", "done"}
 class StateValidationError(ValueError):
     """Raised when QA loop state fails validation."""
     pass
+
+
+def read_state(memory) -> dict | None:
+    """Read QA state from memory, handling MdMemory's str serialization."""
+    raw = memory.read("qa_state", "loop")
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw.replace("'", '"'))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def write_state(memory, state: dict) -> None:
+    """Write QA state as JSON string to memory."""
+    memory.write("qa_state", json.dumps(state, ensure_ascii=False), "loop")
 
 
 def create_initial_state(

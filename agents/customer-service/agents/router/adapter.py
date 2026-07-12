@@ -3,7 +3,7 @@ import re
 from harness.interfaces.types import TextEvent, UserRequest
 from harness.runtime.bridge_adapter import KernelBridgeAdapter
 from harness.interfaces.memory_backend import MemoryBackend
-from shared.state_schema import create_initial_state
+from shared.state_schema import create_initial_state, write_state
 
 
 class RouterAdapter:
@@ -46,7 +46,7 @@ class RouterAdapter:
 
             if parsed["intent"] == "qa":
                 state = create_initial_state(question=self._current_user_message)
-                self._memory.write("qa_state", state, "loop")
+                write_state(self._memory, state)
                 self._kernel.send_input("direction", UserRequest(
                     text="[TASK]",
                     metadata={
