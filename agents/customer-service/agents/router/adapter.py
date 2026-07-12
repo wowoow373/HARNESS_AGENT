@@ -25,9 +25,12 @@ class RouterAdapter:
 
     async def receive(self) -> UserRequest:
         request = await self._kba.receive()
-        # ★ Skip entry_prompt (has workflow_flag, no "from") — only save real user messages
-        if request.text and not request.metadata.get("type"):
-            if "workflow_flag" not in request.metadata:
+        meta = request.metadata or {}
+        # Save user message text for routing. Skip:
+        # - entry_prompt (has workflow_flag)
+        # - QA answer back from Validation (type=qa_answer)
+        if request.text and meta.get("type") != "qa_answer":
+            if "workflow_flag" not in meta:
                 self._current_user_message = request.text
         return request
 
