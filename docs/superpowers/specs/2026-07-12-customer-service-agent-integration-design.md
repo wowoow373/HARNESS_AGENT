@@ -257,10 +257,17 @@ agents/
 
 ### 8.2 与 topic_code 的关系
 
-- 不复制 `topic_code` 源码。
-- 通过 `PYTHONPATH` 或软链接使 `topic_code/src/` 可被导入。
-- 复用 `topic_code` 的 `CoreController`、`SubGraphMerger`、`ValidatorEngine`、`Retriever` 等核心模块。
-- 复用 `topic_code/configs/core_api_v2.yaml` 的 API 模型配置，避免本地 GPU 依赖。
+- **不直接导入 `topic_code` 的包**，也不调用 `CoreController`、`APIGeneratorEngine`、`APIValidatorEngine` 等类。
+- **提取并保留 `topic_code` 经过验证的核心资产**：
+  - 三个 system prompt（draft / final / validator）
+  - user content builder 函数
+  - 输出解析函数
+  - Generator-Validator 迭代控制流程
+- **在 `agents/customer-service/` 内重新实现**：
+  - `Direction Agent`、`Evidence Agent`、`Validation Agent`
+  - 基于 `networkx` 的 `SubGraphManager`
+  - `QA Workflow` 编排逻辑
+- 参考 `topic_code/configs/core_api_v2.yaml` 的 API 模型参数，避免本地 GPU 依赖。
 
 ---
 
@@ -307,8 +314,8 @@ agents/
 
 | 风险 | 应对 |
 |---|---|
-| `topic_code` 与 Harness 的接口不兼容 | 通过包装层隔离，不改动 `topic_code` 源码 |
-| 演示效果过度依赖 prompt 调优 | 复用 `topic_code` 已验证的 prompt，减少重写 |
+| `topic_code` 与 Harness 的抽象不匹配 | 提取 prompt 与解析逻辑，重新实现控制流程与状态管理 |
+| 重新实现引入 bug，效果偏离原研究 | 复用 `topic_code` 已验证的 prompt 和 parser，用原数据集做回归验证 |
 | 前端与终端事件不同步 | 统一事件模型，由 Workflow 统一发射 |
 | 多 Agent 平级导致拓扑复杂 | 本期只保留 6 个 Agent，不继续拆分 |
 

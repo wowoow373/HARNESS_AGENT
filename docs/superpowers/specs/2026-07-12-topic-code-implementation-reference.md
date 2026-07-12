@@ -2,6 +2,7 @@
 
 **日期**: 2026-07-12  
 **目标**: 为 `harness_agent` 集成提供 `topic_code` 的精确实现说明、输入输出格式与代码路径  
+**核心复用策略**: **不直接导入 `topic_code` 的包或调用其 `CoreController` 等类**，而是提取其经过验证的 prompt 模板、解析逻辑与控制流程，在 `agents/customer-service/` 内重新实现  
 **目标读者**: 负责集成落地的工程师
 
 ---
@@ -40,7 +41,46 @@
 
 ---
 
-## 2. 入口与配置
+## 2. 复用策略说明（重要）
+
+### 2.1 不直接依赖 `topic_code` 包
+
+`topic_code` 是一个学术研究代码库，其模块结构、依赖（如 `unsloth`）、导入路径都与 `harness_agent` 不完全兼容。因此 **customer-service Agent 不直接 `import topic_code` 或调用 `CoreController` / `APIGeneratorEngine` / `APIValidatorEngine` 等类**。
+
+### 2.2 提取什么
+
+从 `topic_code` 中提取并保留以下资产：
+
+| 资产类型 | 具体项 | 用途 |
+|---|---|---|
+| **System Prompt** | `CORE_DRAFT_SYSTEM_PROMPT_EVIDENCE_ONLY` | Direction Agent 的 system prompt |
+| **System Prompt** | `CORE_FINAL_SYSTEM_PROMPT_EVIDENCE_ONLY` | Evidence Agent 的 system prompt |
+| **System Prompt** | `CORE_VALIDATOR_SYSTEM_PROMPT_EVIDENCE_ONLY` | Validation Agent 的 system prompt |
+| **User Content Builder** | `build_core_draft_v3_user_content()` | 构造 Direction Agent 输入 |
+| **User Content Builder** | `build_core_final_v3_user_content()` | 构造 Evidence Agent 输入 |
+| **User Content Builder** | `build_core_validator_content_from_merger()` | 构造 Validation Agent 输入 |
+| **Parser** | `parse_draft_v3_output()` / `parse_draft_list()` | 解析方向生成输出 |
+| **Parser** | `_parse_final()` | 解析 triple 确认输出 |
+| **Parser** | `parse_validator_decisions()` / `parse_validator_answer()` | 解析校验输出 |
+| **控制流程** | `CoreController.run()` 主循环 | 参考其 expand → validate 迭代逻辑 |
+| **数据结构** | `SubGraphMerger` 设计 | 参考其节点/边/路径抽象，可用 networkx 重新实现 |
+
+### 2.3 重新实现什么
+
+在 `agents/customer-service/` 中重新实现：
+
+- `Direction Agent`：调用 LLM API，使用提取的 draft prompt 和 parser。
+- `Evidence Agent`：内部固定调用检索器 + LLM API，使用提取的 final prompt 和 parser。
+- `Validation Agent`：调用 LLM API，使用提取的 validator prompt 和 parser。
+- `SubGraphManager`：基于 `networkx.DiGraph` 重新实现，支持序列化到 MemoryBackend。
+- `QA Workflow`：重新实现 expand → validate 循环，调度三个 Agent。
+
+### 2.4 为什么这样设计
+
+1. **避免依赖耦合**：`topic_code` 的 `src/` 不是稳定包，直接导入会引入环境、路径、依赖问题。
+2. **保持 Harness 风格**：新代码完全使用 Harness 的 Agent、MemoryBackend、ContextAssembler、InputAdapter 等抽象。
+3. **便于改造**：重新实现后，prompt 可以逐步改写为客服领域 wording，而不受 `topic_code` 原始代码约束。
+4. **面试叙事清晰**：可以明确说“我参考了验证式问答的研究 insight，在 Runtime 上重新实现了产品化版本”。
 
 ### 2.1 主入口
 
@@ -652,27 +692,64 @@ class SubGraphMerger:
 
 ## 9. 与 customer-service 集成的映射
 
-### 9.1 复用策略
+### 9.1 复用策略：提取 Prompt，重新实现
 
-| topic_code 组件 | 集成方式 |
-|---|---|
-| `CoreController` | 整体包装为 `QAWorkflow` 的编排参考，或拆解后平级调用 |
-| `APIGeneratorEngine` | 复用为 Direction Agent 与 Evidence Agent 的 LLM 调用层 |
-| `APIValidatorEngine` | 复用为 Validation Agent |
-| `DenseRetriever` / `BM25Retriever` | 复用为 Evidence Agent 内部检索器 |
-| `SubGraphMerger` | 复用为 QA Workflow 的共享状态 |
-| `src/prompts.py` | 复用 system prompt 和解析函数，必要时改写为客服领域 wording |
+| topic_code 组件 | 处理方式 | 原因 |
+|---|---|---|
+| `CoreController` | **参考其流程，重新实现 QA Workflow** | 学术研究代码与 Harness 生命周期、接口不兼容 |
+| `APIGeneratorEngine` | **参考实现，重新封装为 Agent** | 需适配 Harness 的 Agent / ContextAssembler 抽象 |
+| `APIValidatorEngine` | **参考实现，重新封装为 Agent** | 需适配 Harness 的 Agent / MemoryBackend 抽象 |
+| `DenseRetriever` / `BM25Retriever` | **参考实现，重新封装** | 检索逻辑简单，可直接重写；或复用 `sentence-transformers` / `rank-bm25` |
+| `SubGraphMerger` | **参考设计，用 networkx 重新实现** | 需序列化到 Harness `MemoryBackend` |
+| `src/prompts.py` | **直接提取并保留** | 这是经过验证的核心资产，应整体迁移 |
 
 ### 9.2 Agent 映射
 
-| customer-service Agent | topic_code 对应 | 说明 |
+| customer-service Agent | topic_code 参考 | 在新项目中的实现 |
 |---|---|---|
-| **Direction Agent** | `APIGeneratorEngine.draft_generate_list_v3()` | 输入输出直接复用 |
-| **Evidence Agent** | `Retriever.retrieve()` + `APIGeneratorEngine.final_generate_v3()` | 内部固定调用 |
-| **Validation Agent** | `APIValidatorEngine.score_graph_with_raw()` | 输入 SubGraph，输出 KEEP/DISCARD + ANSWER |
-| **QA Workflow** | `CoreController.run()` 的逻辑 | 控制循环 + 状态管理 |
+| **Direction Agent** | `APIGeneratorEngine.draft_generate_list_v3()` 的 prompt + parser | 新 Agent，使用提取的 draft system prompt + user content builder + parser |
+| **Evidence Agent** | `Retriever.retrieve()` + `APIGeneratorEngine.final_generate_v3()` 的 prompt + parser | 新 Agent，内部固定调用检索器 + final system prompt + parser |
+| **Validation Agent** | `APIValidatorEngine.score_graph_with_raw()` 的 prompt + parser | 新 Agent，使用提取的 validator system prompt + parser |
+| **SubGraphManager** | `SubGraphMerger` | 基于 `networkx.DiGraph` 重新实现 |
+| **QA Workflow** | `CoreController.run()` 的主循环 | 用 Harness Runtime 重新编排 Direction → Evidence → Validation 循环 |
 
-### 9.3 输入输出转换
+### 9.3 需要提取并保留的代码片段
+
+#### 9.3.1 System Prompts（直接复制）
+
+| Prompt | topic_code 位置 |
+|---|---|
+| `CORE_DRAFT_SYSTEM_PROMPT_EVIDENCE_ONLY` | `src/prompts.py:516` |
+| `CORE_FINAL_SYSTEM_PROMPT_EVIDENCE_ONLY` | `src/prompts.py:615` |
+| `CORE_VALIDATOR_SYSTEM_PROMPT_EVIDENCE_ONLY` | `src/prompts.py:365` |
+
+#### 9.3.2 User Content Builders（复制并适配）
+
+| Builder | topic_code 位置 |
+|---|---|
+| `build_core_draft_v3_user_content()` | `src/prompts.py:547` |
+| `build_core_final_v3_user_content()` | `src/prompts.py` |
+| `build_core_validator_content_from_merger()` | `src/prompts.py` |
+
+#### 9.3.3 Parsers（复制并保留）
+
+| Parser | topic_code 位置 |
+|---|---|
+| `parse_draft_v3_output()` | `src/prompts.py:574` |
+| `parse_draft_list()` | `src/prompts.py:439` |
+| `_parse_final()` | `src/core/controller.py:39` |
+| `parse_validator_decisions()` | `src/core/validator.py:192` |
+| `parse_validator_answer()` | `src/core/validator.py` |
+
+#### 9.3.4 控制流程（参考并重新实现）
+
+| 流程 | topic_code 位置 |
+|---|---|
+| expand → validate 主循环 | `src/core/controller.py:187-386` |
+| 状态图维护 | `src/subgraph/merger.py` |
+| 路径提取与排名 | `src/core/controller.py:56-103`, `src/core/answer_selection.py` |
+
+### 9.4 输入输出等价关系
 
 **Direction Agent：**
 
@@ -727,7 +804,7 @@ score_graph_with_raw(question, merger)
 # customer-service 输入
 {
     "question": question,
-    "graph_state": merger.to_graph_state()  # 从 SubGraphMerger 提取
+    "graph_state": graph_state  # SubGraphManager 的序列化表示
 }
 ```
 
@@ -745,19 +822,20 @@ score_graph_with_raw(question, merger)
 | 图状态 | `src/subgraph/merger.py` | `SubGraphMerger` |
 | Prompt | `src/prompts.py` | `CORE_DRAFT_SYSTEM_PROMPT_EVIDENCE_ONLY`, `CORE_FINAL_SYSTEM_PROMPT_EVIDENCE_ONLY`, `CORE_VALIDATOR_SYSTEM_PROMPT_EVIDENCE_ONLY` |
 | 解析 | `src/prompts.py`, `src/core/controller.py`, `src/core/validator.py` | `parse_draft_v3_output`, `_parse_final`, `parse_validator_decisions`, `parse_validator_answer` |
-| 配置 | `configs/core_api_v2.yaml` | API 模式配置 |
-| 入口 | `scripts/run_core.py` | 数据集推理 |
+| 配置 | `configs/core_api_v2.yaml` | API 模式配置（参考模型参数） |
+| 入口 | `scripts/run_core.py` | 数据集推理（参考运行方式） |
 
 ---
 
 ## 11. 集成注意事项
 
-1. **导入路径**：`topic_code/src/` 不在 `harness_agent` 的 Python 路径中，需通过 `PYTHONPATH` 或软链接解决。
-2. **依赖冲突**：`topic_code` 依赖 `unsloth`、`sentence-transformers`、`rank-bm25` 等，集成时需确认环境兼容。
-3. **API 模型**：`configs/core_api_v2.yaml` 使用 API 调用，避免本地 GPU 依赖，适合 demo。
-4. **Prompt 改写**：当前 prompt 面向通用多跳 QA，客服场景需逐步替换为业务 wording（如“改签规则”“赔偿标准”）。
-5. **输出可视化**：`CoreController.run()` 返回的 `inference_trace` 可直接映射为前端事件流。
+1. **不导入 `topic_code` 包**：只提取 prompt、parser 和控制流程作为参考，在 `agents/customer-service/` 内重新实现。
+2. **依赖最小化**：新项目只需 LLM API 客户端、`networkx`、检索库（`sentence-transformers` / `rank-bm25`），不需要 `unsloth` 等训练依赖。
+3. **API 模型参数**：参考 `configs/core_api_v2.yaml` 的 `draft_temperature`、`final_temperature`、`validator.temperature` 等参数。
+4. **Prompt 改写**：当前 prompt 面向通用多跳 QA，客服场景需逐步替换为业务 wording（如“改签规则”“赔偿标准”“会员权益”）。
+5. **状态序列化**：新实现的 `SubGraphManager` 必须支持 `to_dict()` / `from_dict()`，以便存入 Harness `MemoryBackend`。
+6. **事件流映射**：QA Workflow 中每个步骤都应发射标准事件到浏览器和终端，便于可视化。
 
 ---
 
-*本文档为 topic_code 实现细节参考，供 customer-service Agent 集成时使用。*
+*本文档为 topic_code 实现细节参考，供 customer-service Agent 集成时使用。核心复用原则是：**提取 prompt 与解析逻辑，重新实现控制流程与状态管理**。*
