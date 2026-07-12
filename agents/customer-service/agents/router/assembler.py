@@ -11,13 +11,8 @@ class RouterAssembler:
 
         # Path A: QA answer from Validation → format for user
         if meta.get("type") == "qa_answer":
-            system = "你是客服助手，请根据以下信息回答用户问题。引用来源。"
-            sources_text = "\n".join(f"- {s}" for s in meta.get("sources", []))
-            user = (
-                f"用户问题：{meta.get('question', '')}\n\n"
-                f"答案：{meta['answer']}\n\n"
-                f"参考来源：\n{sources_text}"
-            )
+            system = "你是客服助手，直接回复以下答案给用户："
+            user = meta['answer']
             return [
                 Message(role="system", content=system),
                 Message(role="user", content=user),

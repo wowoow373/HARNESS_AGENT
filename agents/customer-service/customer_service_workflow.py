@@ -55,6 +55,11 @@ class _NoOpToolProvider:
 # ★ Singleton shared memory — MdMemory uses in-memory index, so all agents
 # that share QA state MUST use the same instance.
 _SHARED_MEMORY = MdMemory(path="./memory/customer_service/shared")
+# Clear stale QA state from previous run
+try:
+    _SHARED_MEMORY.write("qa_state", "null", "loop")
+except Exception:
+    pass
 
 from agents.router.adapter import RouterAdapter
 from agents.router.assembler import RouterAssembler
