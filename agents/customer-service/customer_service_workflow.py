@@ -35,7 +35,6 @@ from harness.interfaces import (
 from harness.components.memory_backend.md_memory import MdMemory
 from harness.components.sensor.logging_sensor import LoggingSensor
 from harness.components.guide_provider.file_guide_provider import FileGuideProvider
-from harness.components.tool.default_system_tool_provider import DefaultSystemToolProvider
 from harness.runtime.decorators import agent, subscribe
 
 from shared.retriever import InMemoryRetriever
@@ -51,6 +50,12 @@ class _NoOpToolProvider:
         return []
     def execute(self, name, args):
         raise KeyError(f"No tools available: {name}")
+
+
+# ★ Singleton shared memory — MdMemory uses in-memory index, so all agents
+# that share QA state MUST use the same instance.
+_SHARED_MEMORY = _SHARED_MEMORY
+
 from agents.router.adapter import RouterAdapter
 from agents.router.assembler import RouterAssembler
 from agents.direction.adapter import DirectionAdapter
@@ -74,14 +79,15 @@ from agents.fallback.assembler import FallbackAssembler
 )
 def assemble_router():
     container = DIContainer()
-    memory = MdMemory(path="./memory/customer_service/shared")
+    memory = _SHARED_MEMORY
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, RouterAdapter(memory=memory))
     container.register(ContextAssembler, RouterAssembler())
     guide_path = Path(__file__).parent / "AGENTS_router.md"
     if guide_path.exists():
         container.register(GuideProvider, FileGuideProvider(paths=[str(guide_path)]))
-    container.register(SystemToolProvider, DefaultSystemToolProvider())
+    # ★ Router only classifies intent — no tools needed
+    container.register(SystemToolProvider, _NoOpToolProvider())
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
@@ -94,7 +100,7 @@ def assemble_router():
 )
 def assemble_direction():
     container = DIContainer()
-    memory = MdMemory(path="./memory/customer_service/shared")
+    memory = _SHARED_MEMORY
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, DirectionAdapter(memory=memory))
     container.register(ContextAssembler, DirectionAssembler(K=2))
@@ -113,7 +119,7 @@ def assemble_direction():
 )
 def assemble_evidence():
     container = DIContainer()
-    memory = MdMemory(path="./memory/customer_service/shared")
+    memory = _SHARED_MEMORY
     # MVP: load corpus from data/ or use empty
     try:
         import json
@@ -146,7 +152,7 @@ def assemble_evidence():
 )
 def assemble_validation():
     container = DIContainer()
-    memory = MdMemory(path="./memory/customer_service/shared")
+    memory = _SHARED_MEMORY
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, ValidationAdapter(memory=memory))
     container.register(ContextAssembler, ValidationAssembler(memory=memory))
@@ -167,7 +173,7 @@ def assemble_task():
     memory = MdMemory(path="./memory/customer_service/task")
     container.register(MemoryBackend, memory)
     container.register(ContextAssembler, TaskAssembler())
-    container.register(SystemToolProvider, DefaultSystemToolProvider())
+    container.register(SystemToolProvider, _NoOpToolProvider())
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
@@ -183,7 +189,7 @@ def assemble_fallback():
     memory = MdMemory(path="./memory/customer_service/fallback")
     container.register(MemoryBackend, memory)
     container.register(ContextAssembler, FallbackAssembler())
-    container.register(SystemToolProvider, DefaultSystemToolProvider())
+    container.register(SystemToolProvider, _NoOpToolProvider())
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
