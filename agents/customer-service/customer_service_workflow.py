@@ -86,7 +86,7 @@ def assemble_direction():
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, DirectionAdapter(memory=memory))
     container.register(ContextAssembler, DirectionAssembler(K=2))
-    container.register(SystemToolProvider, DefaultSystemToolProvider())
+    # ★ Worker agent — no tools needed (processes structured tasks only)
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
@@ -118,7 +118,7 @@ def assemble_evidence():
     container.register(ContextAssembler, EvidenceAssembler(
         retriever=retriever, memory=memory, top_k=5,
     ))
-    container.register(SystemToolProvider, DefaultSystemToolProvider())
+    # ★ Worker agent — no tools needed
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
@@ -135,7 +135,7 @@ def assemble_validation():
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, ValidationAdapter(memory=memory))
     container.register(ContextAssembler, ValidationAssembler(memory=memory))
-    container.register(SystemToolProvider, DefaultSystemToolProvider())
+    # ★ Worker agent — no tools needed
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
