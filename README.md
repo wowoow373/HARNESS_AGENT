@@ -130,7 +130,7 @@ Runtime(CliConsole()).run(harness)  # Mode A 启动
 
 | 分支 | 说明 |
 |------|------|
-| [`showcase/agents`](https://github.com/wowoow373/HARNESS_AGENT/tree/showcase/agents) | WebSocket 网页聊天助手 + 多人实时群聊 Agent |
+| [`showcase/agents`](https://github.com/wowoow373/HARNESS_AGENT/tree/showcase/agents) | WebSocket 网页聊天助手 + 多人实时群聊 Agent + 客服场景多意图 Agent（知识问答 / 业务办理 / 异常兜底）|
 
 ---
 
