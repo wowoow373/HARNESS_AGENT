@@ -69,7 +69,7 @@ from agents.fallback.assembler import FallbackAssembler
 
 @agent(
     "router",
-    entry_prompt="你是客服系统入口路由。等待用户消息...",
+    entry_prompt="Reply OK.",
     metadata={"role": "入口意图识别"},
 )
 def assemble_router():
@@ -89,7 +89,7 @@ def assemble_router():
 
 @agent(
     "direction",
-    entry_prompt="你是方向生成Agent。等待任务...",
+    entry_prompt="Reply OK.",
     metadata={"role": "方向生成"},
 )
 def assemble_direction():
@@ -108,7 +108,7 @@ def assemble_direction():
 
 @agent(
     "evidence",
-    entry_prompt="你是证据锚定Agent。等待任务...",
+    entry_prompt="Reply OK.",
     metadata={"role": "证据锚定"},
 )
 def assemble_evidence():
@@ -141,7 +141,7 @@ def assemble_evidence():
 
 @agent(
     "validation",
-    entry_prompt="你是全局校验Agent。等待任务...",
+    entry_prompt="Reply OK.",
     metadata={"role": "全局校验"},
 )
 def assemble_validation():
@@ -159,7 +159,7 @@ def assemble_validation():
 
 @agent(
     "task_agent",
-    entry_prompt="你是业务办理助手。等待任务...",
+    entry_prompt="Reply OK.",
     metadata={"role": "业务办理占位"},
 )
 def assemble_task():
@@ -194,12 +194,11 @@ def assemble_fallback():
 # ═══════════════════════════════════════════════════════════════════════════
 
 subscribe("router").to("user")
-subscribe("task_agent").to("router")
-subscribe("fallback").to("router")
 
-# Virtual subscriptions: force direction/evidence/validation into continuous mode.
-# Framework auto-detects mode based on has_subscriptions; without these they'd
-# be oneshot and exit after one round, breaking the multi-hop loop.
+# Virtual subscriptions: force all agents into continuous mode.
+# Actual communication uses kernel.send_input() for precise routing.
+subscribe("task_agent").to("user")
+subscribe("fallback").to("user")
 subscribe("direction").to("user")
 subscribe("evidence").to("user")
 subscribe("validation").to("user")

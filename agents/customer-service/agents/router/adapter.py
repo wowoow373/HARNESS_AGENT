@@ -30,13 +30,13 @@ class RouterAdapter:
         return request
 
     async def send(self, event, target=None):
+        parsed = None
         if isinstance(event, TextEvent):
             parsed = self._parse_intent(event.content)
 
             if parsed["intent"] == "qa":
                 state = create_initial_state(question=self._current_user_message)
                 self._memory.write("qa_state", state, "loop")
-
                 self._kernel.send_input("direction", UserRequest(
                     text="",
                     metadata={
@@ -51,12 +51,18 @@ class RouterAdapter:
                 ))
 
             elif parsed["intent"] == "task":
-                event.content = self._current_user_message
+                self._kernel.send_input("task_agent", UserRequest(
+                    text=self._current_user_message,
+                ))
 
             elif parsed["intent"] == "fallback":
-                pass
+                self._kernel.send_input("fallback", UserRequest(
+                    text=self._current_user_message,
+                ))
 
-        await self._kba.send(event, target)
+        # ★ Only publish to console if not routed via send_input
+        if parsed is None or parsed["intent"] == "qa":
+            await self._kba.send(event, target)
 
     @staticmethod
     def _parse_intent(text: str) -> dict:
