@@ -14,7 +14,13 @@ class DirectionAssembler:
         self._K = K
 
     def assemble(self, ctx: AssemblyContext) -> List[Message]:
-        meta = ctx.user_request.metadata
+        meta = ctx.user_request.metadata if ctx.user_request else {}
+        # Guard: entry_prompt — wait for actual task
+        if not meta.get("task"):
+            return [
+                Message(role="system", content="等待任务..."),
+                Message(role="user", content=ctx.user_request.text if ctx.user_request else "准备就绪"),
+            ]
         system = CORE_DRAFT_SYSTEM_PROMPT_EVIDENCE_ONLY
         user = build_core_draft_v3_user_content(
             question=meta["question"],

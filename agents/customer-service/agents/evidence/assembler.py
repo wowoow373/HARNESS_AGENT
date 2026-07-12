@@ -25,7 +25,13 @@ class EvidenceAssembler:
         self._last_passages = []
 
     def assemble(self, ctx: AssemblyContext) -> List[Message]:
-        meta = ctx.user_request.metadata
+        meta = ctx.user_request.metadata if ctx.user_request else {}
+        # Guard: entry_prompt — wait for actual task with direction
+        if "direction" not in meta:
+            return [
+                Message(role="system", content="等待任务..."),
+                Message(role="user", content=ctx.user_request.text if ctx.user_request else "准备就绪"),
+            ]
         subj, rel = meta["direction"]
 
         query = f"{subj} {rel}"
