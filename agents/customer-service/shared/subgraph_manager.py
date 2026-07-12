@@ -48,11 +48,12 @@ class SubGraphManager:
         if node_id == "ROOT":
             return []
         triples = []
-        for ancestor in nx.ancestors(self._graph, node_id):
-            if ancestor != "ROOT":
-                triples.append(self._graph.nodes[ancestor]["triple_str"])
-        triples.append(self._graph.nodes[node_id]["triple_str"])
-        return triples
+        current = node_id
+        while current != "ROOT":
+            triples.append(self._graph.nodes[current]["triple_str"])
+            preds = list(self._graph.predecessors(current))
+            current = preds[0] if preds else "ROOT"
+        return list(reversed(triples))
 
     def get_leaf_nodes(self) -> list[str]:
         return [n for n in self._graph.nodes
