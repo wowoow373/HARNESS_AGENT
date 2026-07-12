@@ -47,32 +47,34 @@ class RouterAdapter:
                 await self._kba.send(event, target)
                 return
 
-            if parsed["intent"] == "qa":
-                clear_state(self._memory)  # prevent stale state from previous run
-                state = create_initial_state(question=self._current_user_message)
-                write_state(self._memory, state)
-                self._kernel.send_input("direction", UserRequest(
-                    text="[TASK]",
-                    metadata={
-                        "task": "generate_directions",
-                        "question": self._current_user_message,
-                        "expandable_nodes": [{
-                            "node_id": "ROOT",
-                            "confirmed_triples": [],
-                            "evidence_passages": [],
-                        }],
-                    }
-                ))
+            # ★ Only route real user messages, not QA answers or entry prompts
+            if not self._is_qa_answer and self._current_user_message:
+                if parsed["intent"] == "qa":
+                    clear_state(self._memory)
+                    state = create_initial_state(question=self._current_user_message)
+                    write_state(self._memory, state)
+                    self._kernel.send_input("direction", UserRequest(
+                        text="[TASK]",
+                        metadata={
+                            "task": "generate_directions",
+                            "question": self._current_user_message,
+                            "expandable_nodes": [{
+                                "node_id": "ROOT",
+                                "confirmed_triples": [],
+                                "evidence_passages": [],
+                            }],
+                        }
+                    ))
 
-            elif parsed["intent"] == "task":
-                self._kernel.send_input("task_agent", UserRequest(
-                    text=self._current_user_message,
-                ))
+                elif parsed["intent"] == "task":
+                    self._kernel.send_input("task_agent", UserRequest(
+                        text=self._current_user_message,
+                    ))
 
-            elif parsed["intent"] == "fallback":
-                self._kernel.send_input("fallback", UserRequest(
-                    text=self._current_user_message,
-                ))
+                elif parsed["intent"] == "fallback":
+                    self._kernel.send_input("fallback", UserRequest(
+                        text=self._current_user_message,
+                    ))
 
         # ★ Publish to console: QA intent OR QA answer from Validation
         is_answer = isinstance(event, TextEvent) and getattr(event, 'content', '')
