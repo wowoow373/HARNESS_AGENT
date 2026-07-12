@@ -573,9 +573,11 @@ class AsyncLifecycleOrchestrator:
         """判断是否应该退出会话。
 
         退出条件（任一满足即退出）：
-        1. user_request.text 为空字符串或仅空白字符
-        2. user_request.text 匹配退出关键词 "/exit"
-        3. user_request.metadata 中包含 "exit": True
+        1. user_request.text 匹配退出关键词 "/exit"
+        2. user_request.metadata 中包含 "exit": True
+
+        Note: empty text is NOT an exit signal — agents communicate
+        via metadata-driven tasks with text="" by design.
 
         Args:
             user_request: 用户请求。
@@ -583,10 +585,6 @@ class AsyncLifecycleOrchestrator:
         Returns:
             True 如果应该退出，False 否则。
         """
-        if not user_request.text:
-            return True
-        if user_request.text.strip() == "":
-            return True
         if user_request.text.strip() == self._EXIT_KEYWORD:
             return True
         if user_request.metadata.get("exit") is True:
