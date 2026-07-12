@@ -100,7 +100,7 @@ class ValidationAdapter:
 
     def _emit_fallback(self, state: dict, reason: str):
         state["phase"] = "done"
-        state["answer"] = "抱歉，暂时无法回答这个问题，请咨询人工客服。"
+        state["answer"] = "QA模块暂未检索到相关信息，无法回答您的问题，建议转接人工客服。"
         write_state(self._memory, state)
         self._kernel.send_input("router", UserRequest(
             text="[TASK]", metadata={
