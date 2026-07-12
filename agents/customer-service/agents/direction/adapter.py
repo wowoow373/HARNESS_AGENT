@@ -98,14 +98,14 @@ class DirectionAdapter:
                 ))
             else:
                 if self._accumulated_tasks:
-                state["pending"]["total"] = len(self._accumulated_tasks)
+                    state["pending"]["total"] = len(self._accumulated_tasks)
                     state["pending"]["received"] = 0
                     state["pending"]["results"] = []
                     state["phase"] = "evidence"
                     write_state(self._memory, state)
 
                     for task in self._accumulated_tasks:
-                    self._kernel.send_input("evidence", UserRequest(
+                        self._kernel.send_input("evidence", UserRequest(
                             text="[TASK]", metadata=task,
                         ))
                 else:
