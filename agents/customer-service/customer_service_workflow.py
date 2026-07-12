@@ -39,6 +39,18 @@ from harness.components.tool.default_system_tool_provider import DefaultSystemTo
 from harness.runtime.decorators import agent, subscribe
 
 from shared.retriever import InMemoryRetriever
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# No-op tool provider — blocks CompositeSystemToolProvider's default injection
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _NoOpToolProvider:
+    """Returns empty tools list. Used by worker agents that need no tools."""
+    def get_tools(self):
+        return []
+    def execute(self, name, args):
+        raise KeyError(f"No tools available: {name}")
 from agents.router.adapter import RouterAdapter
 from agents.router.assembler import RouterAssembler
 from agents.direction.adapter import DirectionAdapter
@@ -86,7 +98,9 @@ def assemble_direction():
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, DirectionAdapter(memory=memory))
     container.register(ContextAssembler, DirectionAssembler(K=2))
-    # ★ Worker agent — no tools needed (processes structured tasks only)
+    # ★ Worker agent — no tools. Register empty provider to block
+    # CompositeSystemToolProvider's fallback to DefaultSystemToolProvider.
+    container.register(SystemToolProvider, _NoOpToolProvider())
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
@@ -118,7 +132,8 @@ def assemble_evidence():
     container.register(ContextAssembler, EvidenceAssembler(
         retriever=retriever, memory=memory, top_k=5,
     ))
-    # ★ Worker agent — no tools needed
+    # ★ Worker agent — no tools. Register empty provider to block default injection.
+    container.register(SystemToolProvider, _NoOpToolProvider())
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
@@ -135,7 +150,8 @@ def assemble_validation():
     container.register(MemoryBackend, memory)
     container.register(AsyncInputAdapter, ValidationAdapter(memory=memory))
     container.register(ContextAssembler, ValidationAssembler(memory=memory))
-    # ★ Worker agent — no tools needed
+    # ★ Worker agent — no tools. Register empty provider to block default injection.
+    container.register(SystemToolProvider, _NoOpToolProvider())
     container.register(Sensor, LoggingSensor(memory=memory))
     container.register(InputAdapter, object())
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
