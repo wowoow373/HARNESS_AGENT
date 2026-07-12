@@ -32,8 +32,9 @@ class EvidenceAdapter:
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
-            state = self._memory.read("loop", "qa_state")
-            if state is None:
+            # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
+            state = self._memory.read("qa_state", "loop")
+            if not isinstance(state, dict):
                 await self._kba.send(event, target)
                 return
             graph = SubGraphManager.from_dict(state["graph"])
@@ -58,7 +59,7 @@ class EvidenceAdapter:
 
                 state["pending"]["received"] += 1
                 state["pending"]["results"].append(result)
-                self._memory.write("loop", "qa_state", state)
+                self._memory.write("qa_state", state, "loop")
 
                 if state["pending"]["received"] >= state["pending"]["total"]:
                     self._kernel.send_input("validation", UserRequest(

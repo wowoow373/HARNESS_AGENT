@@ -56,7 +56,11 @@ class DirectionAdapter:
         if isinstance(event, TextEvent):
             remaining_q, candidates = parse_draft_v3_output(event.content)
 
-            state = self._memory.read("loop", "qa_state")
+            # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
+            state = self._memory.read("qa_state", "loop")
+            if not isinstance(state, dict):
+                await self._kba.send(event, target)
+                return
             tried = state.get("tried_candidates", {}).get(self._current_node_id, [])
             fresh = [
                 (s, r) for s, r in candidates
@@ -74,7 +78,7 @@ class DirectionAdapter:
 
             tried.extend([(s.lower(), r.lower()) for s, r in fresh])
             state.setdefault("tried_candidates", {})[self._current_node_id] = tried
-            self._memory.write("loop", "qa_state", state)
+            self._memory.write("qa_state", state, "loop")
 
             if self._pending_nodes:
                 next_node = self._pending_nodes.pop(0)
@@ -96,7 +100,7 @@ class DirectionAdapter:
                     state["pending"]["received"] = 0
                     state["pending"]["results"] = []
                     state["phase"] = "evidence"
-                    self._memory.write("loop", "qa_state", state)
+                    self._memory.write("qa_state", state, "loop")
 
                     for task in self._accumulated_tasks:
                         self._kernel.send_input("evidence", UserRequest(

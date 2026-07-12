@@ -29,8 +29,9 @@ class ValidationAdapter:
 
     async def send(self, event, target=None):
         if isinstance(event, TextEvent):
-            state = self._memory.read("loop", "qa_state")
-            if state is None:
+            # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
+            state = self._memory.read("qa_state", "loop")
+            if not isinstance(state, dict):
                 await self._kba.send(event, target)
                 return
             graph = SubGraphManager.from_dict(state["graph"])
@@ -50,7 +51,7 @@ class ValidationAdapter:
                 state["phase"] = "done"
                 state["answer"] = answer
                 state["sources"] = graph.get_sources()
-                self._memory.write("loop", "qa_state", state)
+                self._memory.write("qa_state", state, "loop")
                 self._kernel.send_input("router", UserRequest(
                     text="", metadata={
                         "type": "qa_answer",
@@ -75,7 +76,7 @@ class ValidationAdapter:
                 state["expandable"] = expandable
                 state["phase"] = "direction"
                 state["pending"] = {"total": 0, "received": 0, "results": []}
-                self._memory.write("loop", "qa_state", state)
+                self._memory.write("qa_state", state, "loop")
 
                 expandable_nodes = []
                 for nid in expandable:
@@ -99,7 +100,7 @@ class ValidationAdapter:
     def _emit_fallback(self, state: dict, reason: str):
         state["phase"] = "done"
         state["answer"] = "抱歉，暂时无法回答这个问题，请咨询人工客服。"
-        self._memory.write("loop", "qa_state", state)
+        self._memory.write("qa_state", state, "loop")
         self._kernel.send_input("router", UserRequest(
             text="", metadata={
                 "type": "qa_answer",
