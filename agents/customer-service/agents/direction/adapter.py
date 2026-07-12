@@ -32,10 +32,9 @@ class DirectionAdapter:
     async def receive(self) -> UserRequest:
         raw = await self._kba.receive()
         meta = raw.metadata or {}
-        print(f"[DIRECTION-DEBUG] receive: meta={meta}")
+
 
         if meta.get("task") == "generate_directions":
-            print(f"[DIRECTION-DEBUG] got QA task! question={meta['question']}")
             self._current_question = meta["question"]
             self._pending_nodes = list(meta["expandable_nodes"])
             self._accumulated_tasks = []
@@ -59,11 +58,8 @@ class DirectionAdapter:
             remaining_q, candidates = parse_draft_v3_output(event.content)
 
             # NOTE: MemoryBackend API is read(key, namespace), write(key, value, namespace)
-            print(f"[DIRECTION-DEBUG] send: candidates={candidates}")
             state = self._memory.read("qa_state", "loop")
-            print(f"[DIRECTION-DEBUG] memory state={type(state).__name__}: {str(state)[:200]}")
             if not isinstance(state, dict):
-                print(f"[DIRECTION-DEBUG] BAD STATE — skipping")
                 await self._kba.send(event, target)
                 return
             tried = state.get("tried_candidates", {}).get(self._current_node_id, [])
