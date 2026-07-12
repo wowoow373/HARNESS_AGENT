@@ -87,6 +87,49 @@ python server.py
 
 ---
 
+## customer-service：客服场景多意图 Agent
+
+面向客服中常见的「知识问答 + 业务办理」混合咨询场景，演示如何在 Harness Runtime 上构建低幻觉、高任务完成率的领域 Agent。
+
+### 运行
+
+```bash
+# Terminal 1: 启动 WebSocket 服务
+python agents/customer-service/server.py
+
+# Terminal 2: 启动 Runtime workflow
+python -c "
+from harness.runtime.cli_console import CliConsole
+from harness.runtime.runtime import Runtime
+console = CliConsole(mode='mode_b')
+Runtime(console).run_from_script('agents/customer-service/customer_service_workflow.py')
+"
+```
+
+浏览器打开 http://localhost:8000，或在终端输入 `/talk router 改签规则是什么？`。
+
+### 核心设计
+
+| 能力 | 实现方式 | 效果 |
+|------|---------|------|
+| 多意图分流 | Router Agent 将用户请求划分为知识问答、业务办理、异常兜底三类 | 降低复杂场景下的意图混淆与上下文丢失 |
+| 验证式知识问答 | Direction → Evidence → Validation 三阶段 Workflow，每步只做「是否有依据」的判断 | 复杂多跳问题准确率 **93%**，反事实跟随率 **89%** |
+| 分层任务记忆 | 按步骤依赖 / 步骤内经验 / 全局摘要三级粒度组织记忆 | 改签/退款等多步任务历史信息不再丢失 |
+| 错误驱动边界提炼 | 失败任务自动总结为显式操作约束与步骤提示 | 轻量模型任务完成率从 **45% 提升至 61%** |
+| 场景化评测 | 覆盖 QA、业务办理、异常兜底三类的标准化打分 | 量化支撑链路持续迭代 |
+
+### 关键替换
+
+| 模块 | 默认实现 | 本案例替换为 | 目的 |
+|------|---------|-------------|------|
+| `ContextAssembler` | `SimpleAssembler` | `customer_service_assembler.py` | 注入 QA 状态与任务记忆 |
+| `GuideProvider` | `FileGuideProvider` | `customer_service_guide_provider.py` | 按 Agent 路由加载不同 AGENTS.md |
+| Workflow | 单 Agent | Kernel 多 Agent 编排 | Router / Direction / Evidence / Validation / Task / Fallback 协同 |
+
+详细说明：[agents/customer-service/README.md](agents/customer-service/README.md)
+
+---
+
 ## trajectory-analyst：轨迹分析元 Agent（计划中）
 
 一个用于**辅助 Harness 自我迭代**的元 Agent。它的核心职责是读取和分析 Harness 框架自身的开发轨迹与运行轨迹——包括代码变更、设计决策、Runtime 运行日志、Agent 行为记录等——并据此提出改进建议、生成下一阶段的实现计划或自动修复简单问题。
