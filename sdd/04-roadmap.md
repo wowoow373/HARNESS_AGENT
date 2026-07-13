@@ -20,7 +20,7 @@
 | 07 | sensor | ✅ | Sensor 接口 + LoggingSensor 实现 | 02-1, 03 | `harness/components/sensor/` |
 | 08 | input-adapter | ✅ | InputAdapter 接口 + CliAdapter 实现 | 02-1 | `harness/components/input_adapter/` |
 | 09 | hooks | ✅ | Hook 系统（注册、链式调用、所有 Hook 点） | 01 | `harness/hooks/*` |
-| 10 | di-assembly | ✅ | 端到端装配 + YAML 装配 + CLI 入口 + 集成测试 + Profile 模板 | 01-09 | `main.py`, `harness/config/yaml_assembler.py`, `profiles/coding-assistant/`, 集成测试 |
+| 10 | di-assembly | ✅ | 端到端装配 + YAML 装配 + CLI 入口 + 集成测试 + Profile 模板 | 01-09 | `main.py`, `harness/config/yaml_assembler.py`, `agents/coding-assistant/`, 集成测试 |
 | 11 | event-driven-adapter | ✅ | InputAdapter.send() 改为事件驱动：5 种事件类型，前后台分离 | 08, 01 | `harness/interfaces/types.py`（+事件类型）, `cli_adapter.py`, `orchestrator.py` |
 
 ---

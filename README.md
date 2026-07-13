@@ -8,6 +8,20 @@
 
 ---
 
+## Showcases
+
+本仓库已内置以下领域 Agent 案例：
+
+| 案例 | 路径 | 说明 |
+|------|------|------|
+| **chat-web** | [`agents/chat-web/`](agents/chat-web/) | WebSocket 网页聊天助手 |
+| **group-chat** | [`agents/group-chat/`](agents/group-chat/) | 多人实时群聊 Agent |
+| **customer-service** | [`agents/customer-service/`](agents/customer-service/) | 客服场景多意图 Agent（知识问答 / 业务办理 / 异常兜底）|
+
+完整案例总览、运行方式与架构说明见 [agents/README.md](agents/README.md)。
+
+---
+
 ## 为什么选 Harness？
 
 **1. 任意替换模块 → 配置出你的领域 Agent。**
@@ -121,16 +135,6 @@ Runtime(CliConsole()).run(harness)  # Mode A 启动
 | 文件 | 说明 |
 |------|------|
 | [docs/runtime/AGENTS_EXAMPLE.md](docs/runtime/AGENTS_EXAMPLE.md) | Runtime 工具 few-shot 示例（复制为 AGENTS.md 即可启用） |
-
----
-
-## Showcases
-
-功能演示放在独立分支上，master 只保留框架核心：
-
-| 分支 | 说明 |
-|------|------|
-| [`showcase/agents`](https://github.com/wowoow373/HARNESS_AGENT/tree/showcase/agents) | WebSocket 网页聊天助手 + 多人实时群聊 Agent + 客服场景多意图 Agent（知识问答 / 业务办理 / 异常兜底）|
 
 ---
 

@@ -70,7 +70,7 @@
 
 ## T8. 端到端验证
 
-- [ ] `echo "hello" | timeout 5 python main.py run --config profiles/coding-assistant/harness.yaml` 确认不崩溃（即使无 LLM）
+- [ ] `echo "hello" | timeout 5 python main.py run --config agents/coding-assistant/harness.yaml` 确认不崩溃（即使无 LLM）
 - [ ] 确认工具事件正确输出到 stderr
 
 ## T9. 更新 SDD 文档

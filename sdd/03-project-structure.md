@@ -22,12 +22,13 @@ harness_agent/
 │   ├── components/               # 各组件默认实现
 │   ├── hooks/                    # Hook 系统
 │   └── di.py                     # 装配入口（Harness 类）
-├── profiles/                     # 领域模板
-│   └── coding-assistant/
-│       ├── profile.toml          # 模板元数据
-│       ├── harness.yaml          # DI 装配声明
-│       ├── AGENTS.md             # Agent 指导
-│       └── README.md
+├── agents/                       # 领域模板与 Agent 案例
+│   ├── coding-assistant/         # 领域模板
+│   │   ├── profile.toml          # 模板元数据
+│   │   ├── harness.yaml          # DI 装配声明
+│   │   ├── AGENTS.md             # Agent 指导
+│   │   └── README.md
+│   └── ...                       # 其他模板或领域 Agent 案例
 ├── tests/                        # 测试
 │   ├── test_yaml_assembler.py    # YamlAssembler 单元测试
 │   └── test_e2e_assembly.py      # 端到端装配集成测试
@@ -213,25 +214,27 @@ tests/
 
 ---
 
-### `profiles/`
+### `agents/`
 
-每个领域模板是一个独立文件夹，包含预设的组件装配方案和默认实现骨架。
+`agents/` 目录包含领域模板与领域 Agent 案例。每个领域模板是一个独立文件夹，包含预设的组件装配方案和默认实现骨架；领域 Agent 案例则展示如何基于 Harness Runtime 构建具体应用。
 
 **两种配置文件的职责分工：**
 - `profile.toml` — 模板元数据（name, description, template, version, modules），由 `ConfigLoader` 读取
 - `harness.yaml` — DI 装配声明（组件、Hook、LLM 配置），由 `YamlAssembler` 读取
-- 两者共存于 profile 目录下，各司其职
+- 两者共存于模板目录下，各司其职
 
 ```
-profiles/
-├── coding-assistant/
+agents/
+├── coding-assistant/            # 领域模板
 │   ├── profile.toml           # 模板元数据（ConfigLoader）
 │   ├── harness.yaml           # DI 装配声明（YamlAssembler）
 │   ├── AGENTS.md              # Agent 指导文件
 │   └── README.md              # 使用说明
-├── travel-assistant/
-│   └── ...
-└── research-assistant/
+├── chat-web/                  # 领域 Agent 案例
+├── group-chat/                # 领域 Agent 案例
+├── customer-service/          # 领域 Agent 案例
+├── travel-assistant/          # 计划中
+└── research-assistant/        # 计划中
     └── ...
 ```
 

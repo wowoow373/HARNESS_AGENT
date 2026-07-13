@@ -51,7 +51,7 @@
                               │       已有（无需修改）    │
                               └─────────────────────────┘
 
-profiles/coding-assistant/        ← 领域模板骨架 (NEW)
+agents/coding-assistant/        ← 领域模板骨架 (NEW)
 ├── harness.yaml                  ← YAML 装配声明
 ├── AGENTS.md                     ← Agent 指导文件
 └── README.md                     ← 使用说明
@@ -309,7 +309,7 @@ python main.py init --profile coding-assistant my-agent
 
 效果：
   1. 创建 my-agent/ 目录
-  2. 复制 profiles/coding-assistant/ 下的模板文件：
+  2. 复制 agents/coding-assistant/ 下的模板文件：
      - harness.yaml（装配声明）
      - AGENTS.md（Agent 指导文件）
      - README.md（使用说明）
@@ -347,7 +347,7 @@ python main.py run --config harness.yaml
 
 ## 5. Profile 模板设计
 
-### 5.1 `profiles/coding-assistant/` 目录结构
+### 5.1 `agents/coding-assistant/` 目录结构
 
 > **与顶层设计的协调说明**：`sdd/03-project-structure.md` 中的 profiles 结构
 > （含 `profile.toml`、`input/`、`guides/` 等子目录）是早期占位设计。
@@ -358,7 +358,7 @@ python main.py run --config harness.yaml
 > - 两者共存于 profile 目录下，各司其职。
 
 ```
-profiles/coding-assistant/
+agents/coding-assistant/
 ├── profile.toml           # 模板元数据（已有 ConfigLoader 支持）
 ├── harness.yaml           # 默认 YAML 装配声明（本 batch 新增）
 ├── AGENTS.md              # Agent 指导文件（核心身份 + 行为规则）
@@ -445,7 +445,7 @@ harness/
 ├── interfaces/              # (已有，本次不修改)
 └── components/              # (已有，本次不修改)
 
-profiles/                    # (NEW)
+agents/                    # (NEW)
 └── coding-assistant/
     ├── harness.yaml         # (NEW)
     ├── AGENTS.md            # (NEW)
@@ -520,7 +520,7 @@ sdd/batches/batch-10-di-assembly/
 |------|--------------|---------|
 | YamlAssembler | 新增领域模板 | 每个模板有自己默认的 harness.yaml |
 | main.py CLI | 最终用户 | `harness init` 和 `harness run` 的入口 |
-| profiles/coding-assistant | 新增领域模板 | 作为模板参考和复制源 |
+| agents/coding-assistant | 新增领域模板 | 作为模板参考和复制源 |
 | 端到端测试 | 所有后续修改 | 验证完整生命周期不回归 |
 
 ---
@@ -532,7 +532,7 @@ sdd/batches/batch-10-di-assembly/
 ```
 harness/config/yaml_assembler.py    ← YamlAssembler 实现
 main.py                             ← CLI 入口
-profiles/coding-assistant/          ← coding-assistant 模板目录
+agents/coding-assistant/          ← coding-assistant 模板目录
   profile.toml                      ← 模板元数据（格式与现有 ConfigLoader 兼容）
   harness.yaml
   AGENTS.md
@@ -545,7 +545,7 @@ tests/test_e2e_assembly.py          ← 端到端装配集成测试
 
 ```
 harness/di.py                       ← 仅新增 Harness.register_hook() 公开方法（一行代理）
-sdd/03-project-structure.md         ← 更新 profiles/ 目录结构以匹配实际实现
+sdd/03-project-structure.md         ← 更新 agents/ 目录结构以匹配实际实现
 ```
 
 ### 不修改的文件（本次 batch 边界）

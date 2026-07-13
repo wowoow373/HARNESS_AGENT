@@ -200,8 +200,8 @@ def register_hook(self, event: str, hook: Hook) -> None:
 2. 接收 `output_dir` 位置参数
 3. 检查 `output_dir` 是否已存在：
    - 存在且非空 → 打印错误并退出（`--force` 标志跳过检查）
-4. 查找模板目录：`profiles/{profile}/`
-5. 模板目录不存在 → 打印错误，列出 `profiles/` 下可用模板
+4. 查找模板目录：`agents/{profile}/`
+5. 模板目录不存在 → 打印错误，列出 `agents/` 下可用模板
 6. 复制模板目录下所有文件到 `output_dir/`
 7. 打印成功信息，列出创建的文件
 
@@ -236,9 +236,9 @@ def register_hook(self, event: str, hook: Hook) -> None:
 **目标**：创建 coding-assistant 领域模板骨架。
 
 **文件**：
-- `profiles/coding-assistant/harness.yaml`（新建）
-- `profiles/coding-assistant/AGENTS.md`（新建）
-- `profiles/coding-assistant/README.md`（新建）
+- `agents/coding-assistant/harness.yaml`（新建）
+- `agents/coding-assistant/AGENTS.md`（新建）
+- `agents/coding-assistant/README.md`（新建）
 
 **详细要求**：
 

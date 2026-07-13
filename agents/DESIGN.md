@@ -1,32 +1,33 @@
 # Harness 领域 Agent 前置分析文档
 
-> 本文档记录 `showcase/agents` 分支上领域 Agent 的设计意图、组件替换策略和技术方案分析。
+> 本文档记录 `agents/` 目录下领域 Agent 的设计意图、组件替换策略和技术方案分析。
 >
-> **版本**: v1.0 | **分支**: `showcase/agents`
+> **版本**: v1.0 | **位置**: `agents/`
 >
 > **状态**: `chat-web` ✅ 已实现 | `trajectory-analyst` 🔜 计划中
 
 ---
 
-## 0. 分支策略背景
+## 0. 目录结构背景
 
-### 0.1 双线分支模型
+### 0.1 `agents/` 与框架核心的关系
 
 ```
-master ──────────────────────────────► (框架核心持续开发)
-  │ 保留: harness/ tests/ docs/ sdd/ examples/
-  │ 面向: 框架开发者、贡献者
+master ──────────────────────────────► (框架核心 + 领域 Agent 案例)
   │
-  └──► showcase/agents ──────────────► (领域 Agent 展示)
-       移除: sdd/
-       保留: harness/ tests/ docs/ examples/
-       新增: agents/chat-web/ agents/trajectory-analyst/
-       面向: 框架使用者、快速体验者
+  ├── harness/ tests/ docs/ sdd/ examples/    # 框架核心
+  │
+  └── agents/ ─────────────────────────► (领域 Agent 展示)
+       ├── coding-assistant/             # 领域模板
+       ├── chat-web/                     # WebSocket 网页聊天助手
+       ├── group-chat/                   # 多人实时群聊 Agent
+       ├── customer-service/             # 客服场景多意图 Agent
+       └── trajectory-analyst/           # 轨迹分析元 Agent（计划中）
 ```
 
-- **单向同步**: `showcase/agents` 定期 rebase/cherry-pick `master` 核心更新，不反向合并。
-- **独立演进**: showcase 上的 Agent 实现不回流 master，保持 master 纯净。
-- **快速开始**: 用户 `git clone -b showcase/agents` 直接拿到可运行的领域 Agent。
+- **同仓共存**: `agents/` 与框架核心一起保留在 `master`，方便用户直接运行和参考。
+- **独立组件**: 每个 Agent 案例是自包含目录，只通过 Harness Runtime 接口与框架核心交互。
+- **快速开始**: 用户 `git clone` 后直接进入 `agents/<case>/` 即可运行对应案例。
 
 ### 0.2 与框架核心README卖点的呼应
 
@@ -306,8 +307,8 @@ Phase 2: trajectory-analyst
 Phase 3: 收尾
   ├── ✅ 更新 agents/chat-web/README.md（添加截图、目录、测试说明）
   ├── ✅ 更新 agents/DESIGN.md（标注实现状态）
-  ├── 🔜 更新根 README.md（添加 Agent showcase 导航）
-  ├── 🔜 添加 agents/README.md（"如何创建你的领域 Agent" 教程）
+  ├── ✅ 更新根 README.md（添加 Agent showcase 导航）
+  ├── ✅ 添加 agents/README.md（领域 Agent 案例总览）
   └── 🔜 trajectory-analyst 实现
 ```
 

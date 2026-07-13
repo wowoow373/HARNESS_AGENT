@@ -42,7 +42,7 @@
 
 - [ ] `python main.py init my-agent` 创建 `my-agent/` 目录
 - [ ] 创建的文件包含：`harness.yaml`、`AGENTS.md`、`README.md`
-- [ ] 文件内容与 `profiles/coding-assistant/` 模板一致
+- [ ] 文件内容与 `agents/coding-assistant/` 模板一致
 - [ ] 目标目录已存在时打印错误提示（无 `--force` 时）
 - [ ] `--force` 标志允许覆盖已存在的目录
 - [ ] `--profile` 指定不存在的模板时打印可用模板列表
@@ -79,7 +79,7 @@
 
 ## 四、Profile 模板验收
 
-- [ ] `profiles/coding-assistant/` 目录存在
+- [ ] `agents/coding-assistant/` 目录存在
 - [ ] `harness.yaml` 包含全部 6 个默认组件注册
 - [ ] `AGENTS.md` 包含基本身份定义和行为规则
 - [ ] `README.md` 包含使用说明
@@ -149,7 +149,7 @@
 | `harness/config/__init__.py` | MODIFIED | 新增 YamlAssembler 相关导出 |
 | `harness/di.py` | MODIFIED | 仅新增 Harness.register_hook() 方法 |
 | `main.py` | NEW | CLI 入口（init / run） |
-| `profiles/coding-assistant/` | NEW | 领域模板（harness.yaml + AGENTS.md + README.md + profile.toml） |
+| `agents/coding-assistant/` | NEW | 领域模板（harness.yaml + AGENTS.md + README.md + profile.toml） |
 | `tests/test_yaml_assembler.py` | NEW | 41 个 YamlAssembler 单元测试 |
 | `tests/test_e2e_assembly.py` | NEW | 16 个端到端集成测试 |
 | `sdd/batches/batch-10-di-assembly/design.md` | UPDATED | 完整设计文档 |
