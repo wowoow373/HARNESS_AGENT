@@ -570,15 +570,23 @@ harness.run()
 每个领域模板是一个独立的文件夹，包含预设的组件装配方案和 Agent 指导文件：
 
 ```
-profiles/
+agents/
 ├── coding-assistant/
 │   ├── profile.toml          # 模板元数据（ConfigLoader）
 │   ├── harness.yaml          # DI 装配声明（YamlAssembler）
 │   ├── AGENTS.md             # Agent 指导文件（身份+规则）
 │   └── README.md             # 使用说明与自定义指南
 │
-├── travel-assistant/         # 未来
-└── research-assistant/       # 未来
+├── chat-web/                 # WebSocket 网页聊天助手（showcase）
+│   ├── AGENTS.md
+│   ├── README.md
+│   ├── server.py
+│   ├── adapter/
+│   ├── static/
+│   ├── tools/
+│   └── tests/
+│
+└── trajectory-analyst/       # 轨迹分析元 Agent（计划中）
 ```
 
 **两种配置文件的分工**：

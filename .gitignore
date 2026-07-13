@@ -21,7 +21,10 @@ venv/
 # Environment
 .env
 .env.local
-memory/episodic/session_*.md
 
-# Agent runtime sessions
-agents/
+# Runtime session data
+memory/episodic/session_*.md
+memory/group_chat/
+memory/customer_service/
+agents/chat-web/memory/
+agents/group-chat/__pycache__/

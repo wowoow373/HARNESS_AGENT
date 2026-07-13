@@ -586,7 +586,7 @@ Workflow 不是另起炉灶——它是现有递归 Harness 模式的自然延�
 | [CORE_DEVELOPER_GUIDE.md](../CORE_DEVELOPER_GUIDE.md) | 开发者 | 数据类型速查、LLM 集成、消息转换、测试 |
 | [sdd/](../sdd/) | 贡献者 | 软件设计文档与分批实现计划 |
 | [examples/](../examples/) | 开发者 | 可运行的示例代码 |
-| [profiles/](../profiles/) | 所有人 | 领域模板（coding-assistant 等） |
+| [agents/](../agents/) | 所有人 | 领域 Agent 展示（chat-web、trajectory-analyst） |
 
 ---
 

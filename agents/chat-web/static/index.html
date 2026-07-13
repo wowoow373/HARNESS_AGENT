@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harness Chat</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(10px);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #ef4444;
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  .chat-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .message {
+    max-width: 80%;
+    padding: 12px 16px;
+    border-radius: 18px;
+    line-height: 1.5;
+    font-size: 14px;
+    word-break: break-word;
+    animation: fadeIn 0.25s ease;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .message.user {
+    align-self: flex-end;
+    background: #3b82f6;
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .message.assistant {
+    align-self: flex-start;
+    background: #fff;
+    color: #1f2937;
+    border-bottom-left-radius: 4px;
+  }
+  .message.tool-call {
+    align-self: flex-start;
+    background: #fef3c7;
+    color: #92400e;
+    border-bottom-left-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid #92400e;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .message.tool-result {
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+    padding: 0;
+    overflow: hidden;
+    max-width: 90%;
+  }
+  .tool-result-header {
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tool-result.success .tool-result-header { background: #dcfce7; color: #166534; }
+  .tool-result.error .tool-result-header { background: #fee2e2; color: #991b1b; }
+  .tool-result-body {
+    padding: 10px 14px;
+    background: #fff;
+    color: #374151;
+    font-size: 13px;
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .thinking {
+    align-self: flex-start;
+    max-width: 90%;
+    background: #f3f4f6;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  }
+  .thinking-toggle {
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    text-align: left;
+    font-size: 12px;
+    color: #6b7280;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+  }
+  .thinking-toggle:hover { color: #4b5563; }
+  .thinking-toggle::before {
+    content: "▶";
+    font-size: 10px;
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+  .thinking.open .thinking-toggle::before { transform: rotate(90deg); }
+  .thinking-content {
+    display: none;
+    padding: 0 14px 10px;
+    font-size: 12px;
+    color: #6b7280;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  .thinking.open .thinking-content { display: block; }
+  .input-area {
+    display: flex;
+    gap: 10px;
+    padding: 12px 16px 16px;
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(10px);
+    flex-shrink: 0;
+  }
+  .input-area textarea {
+    flex: 1;
+    border: none;
+    border-radius: 20px;
+    padding: 10px 16px;
+    font-size: 14px;
+    resize: none;
+    outline: none;
+    max-height: 120px;
+    font-family: inherit;
+    line-height: 1.4;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .input-area button {
+    border: none;
+    border-radius: 20px;
+    padding: 10px 20px;
+    background: #3b82f6;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    flex-shrink: 0;
+  }
+  .input-area button:hover { background: #2563eb; }
+  .input-area button:disabled { background: #9ca3af; cursor: not-allowed; }
+  .emoji {
+    width: 80px;
+    height: 80px;
+    vertical-align: middle;
+    display: block;
+    border-radius: 8px;
+    object-fit: contain;
+  }
+  .message.emoji-only {
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 4px !important;
+  }
+  @media (max-width: 480px) {
+    .message { max-width: 90%; }
+    .header { padding: 10px 14px; font-size: 15px; }
+    .input-area { padding: 10px 12px 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <span>Harness Chat</span>
+  <div class="status">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">断开</span>
+  </div>
+</div>
+<div class="chat-container" id="chatContainer"></div>
+<div class="input-area">
+  <textarea id="messageInput" rows="1" placeholder="输入消息... (Shift+Enter 换行)"></textarea>
+  <button id="sendBtn" onclick="sendMessage()">发送</button>
+</div>
+
+<script>
+const WS_URL = 'ws://localhost:8000/ws';
+let ws = null;
+let reconnectTimer = null;
+let currentAssistantMsg = null;
+let currentToolCall = null;
+
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const chatContainer = document.getElementById('chatContainer');
+const messageInput = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+
+let emojiMap = {};
+let currentAssistantRawText = '';
+
+async function loadEmojis() {
+  try {
+    const res = await fetch('/static/emojis/manifest.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    emojiMap = {};
+    for (const e of data.emojis || []) {
+      emojiMap[e.id] = e;
+    }
+  } catch (err) {
+    console.error('Failed to load emojis:', err);
+  }
+}
+
+function splitIntoSentences(text) {
+  /* Split text into sentences by ending punctuation (.。!！?？).
+     Remove periods (中文/英文), keep ! and ?. Each sentence becomes a bubble. */
+  const sentences = [];
+  let current = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    current += ch;
+    if ('.。!！?？'.includes(ch)) {
+      sentences.push(current.trim());
+      current = '';
+    }
+  }
+  if (current.trim()) {
+    sentences.push(current.trim());
+  }
+  return sentences.map(s => {
+    // Remove trailing period (English or Chinese)
+    if (s.endsWith('.') || s.endsWith('。')) {
+      return s.slice(0, -1).trim();
+    }
+    return s;
+  }).filter(s => s.length > 0);
+}
+
+function parseMessageParts(text) {
+  /* Parse text into plain text and emoji IDs.
+     Returns {text: string, emojis: [id, id, ...]}.
+     Unknown emoji IDs are dropped. */
+  const parts = text.split(/(:[a-zA-Z_]\w*:)/g);
+  let textParts = [];
+  let emojis = [];
+  for (const part of parts) {
+    const m = part.match(/^:([a-zA-Z_]\w*):$/);
+    if (m) {
+      const id = m[1];
+      if (emojiMap[id]) emojis.push(id);
+    } else {
+      textParts.push(part);
+    }
+  }
+  return { text: textParts.join(''), emojis };
+}
+
+function renderEmojiBlock(eid) {
+  /* Render a single emoji as a standalone message block (WeChat-style). */
+  const info = emojiMap[eid];
+  if (!info) return '';
+  const filename = escapeHtml(info.filename);
+  const desc = escapeHtml(info.description || eid);
+  return '<div class="emoji-only"><img class="emoji" src="/static/emojis/' + filename + '" alt=":' + eid + ':" title="' + desc + '" loading="lazy"></div>';
+}
+
+function setStatus(connected) {
+  if (connected) {
+    statusDot.classList.add('connected');
+    statusText.textContent = '已连接';
+  } else {
+    statusDot.classList.remove('connected');
+    statusText.textContent = '断开';
+  }
+}
+
+function connect() {
+  if (ws) return;
+  try {
+    ws = new WebSocket(WS_URL);
+  } catch (e) {
+    scheduleReconnect();
+    return;
+  }
+  ws.onopen = () => { setStatus(true); };
+  ws.onclose = () => { ws = null; setStatus(false); scheduleReconnect(); };
+  ws.onerror = () => { ws = null; setStatus(false); };
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      handleEvent(data);
+    } catch (err) {
+      console.error('解析消息失败', err);
+    }
+  };
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, 3000);
+}
+
+function scrollToBottom() {
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function appendMessage(cls, html) {
+  const div = document.createElement('div');
+  div.className = 'message ' + cls;
+  div.innerHTML = html;
+  chatContainer.appendChild(div);
+  scrollToBottom();
+  return div;
+}
+
+function handleEvent(data) {
+  switch (data.type) {
+    case 'text': {
+      currentAssistantRawText += data.content;
+      const parsed = parseMessageParts(currentAssistantRawText);
+
+      // Split text into sentences, each as a separate bubble (like WeChat)
+      const sentences = splitIntoSentences(parsed.text);
+      for (const sentence of sentences) {
+        appendMessage('assistant', escapeHtml(sentence));
+      }
+
+      // Render each emoji as a standalone block (WeChat-style)
+      for (const eid of parsed.emojis) {
+        appendMessage('assistant', renderEmojiBlock(eid));
+      }
+
+      scrollToBottom();
+      break;
+    }
+    case 'tool_call': {
+      currentToolCall = appendMessage('tool-call',
+        '<span class="spinner"></span><span>正在调用 <strong>' + escapeHtml(data.tool_name) + '</strong>...</span>');
+      break;
+    }
+    case 'tool_result': {
+      if (currentToolCall) {
+        currentToolCall.remove();
+        currentToolCall = null;
+      }
+      const success = data.success !== false;
+      const cls = success ? 'success' : 'error';
+      const icon = success ? '✓' : '✗';
+      const headerText = (success ? '成功' : '失败') + ' · ' + escapeHtml(data.tool_name) +
+        (data.duration_ms ? ' · ' + data.duration_ms + 'ms' : '');
+      const bodyText = success
+        ? escapeHtml(String(data.result ?? ''))
+        : escapeHtml(String(data.error ?? data.result ?? 'Unknown error'));
+      const resultHtml =
+        '<div class="tool-result ' + cls + '">' +
+          '<div class="tool-result-header">' + icon + ' ' + headerText + '</div>' +
+          '<div class="tool-result-body">' + bodyText + '</div>' +
+        '</div>';
+      appendMessage('tool-result', resultHtml);
+      break;
+    }
+    case 'thinking': {
+      const thinkingDiv = document.createElement('div');
+      thinkingDiv.className = 'thinking';
+      thinkingDiv.innerHTML =
+        '<button class="thinking-toggle">思考过程</button>' +
+        '<div class="thinking-content">' + escapeHtml(data.content) + '</div>';
+      thinkingDiv.querySelector('.thinking-toggle').onclick = () => {
+        thinkingDiv.classList.toggle('open');
+      };
+      chatContainer.appendChild(thinkingDiv);
+      scrollToBottom();
+      break;
+    }
+    case 'stop': {
+      currentAssistantMsg = null;
+      currentAssistantRawText = '';
+      currentToolCall = null;
+      break;
+    }
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function sendMessage() {
+  const text = messageInput.value.trim();
+  if (!text) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    alert('WebSocket 未连接');
+    return;
+  }
+  appendMessage('user', escapeHtml(text));
+  ws.send(JSON.stringify({ text }));
+  messageInput.value = '';
+  messageInput.style.height = 'auto';
+  currentAssistantMsg = null;
+  currentToolCall = null;
+}
+
+messageInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+messageInput.addEventListener('input', () => {
+  messageInput.style.height = 'auto';
+  messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+});
+
+loadEmojis().then(() => connect());
+</script>
+</body>
+</html>
