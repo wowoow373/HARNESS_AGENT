@@ -176,10 +176,10 @@ pytest agents/customer-service/tests/integration/ -v
 
 ## 设计文档
 
-- [实现计划](../../docs/superpowers/plans/2026-07-12-customer-service-agent-implementation.md)
-- [详细设计 — 问答链路](../../docs/superpowers/specs/2026-07-12-customer-service-agent-detailed-design.md)
-- [输出设计](../../docs/superpowers/specs/2026-07-12-customer-service-output-design.md)
-- [集成设计](../../docs/superpowers/specs/2026-07-12-customer-service-agent-integration-design.md)
+- [实现计划](../../docs/showcase/agents/customer-service/implementation.md)
+- [详细设计 — 问答链路](../../docs/showcase/agents/customer-service/detailed-design.md)
+- [输出设计](../../docs/showcase/agents/customer-service/output-design.md)
+- [集成设计](../../docs/showcase/agents/customer-service/integration-design.md)
 
 ---
 

@@ -273,6 +273,6 @@ agents/group-chat/
 
 ## 相关文档
 
-- [docs/design/group-chat-runtime.md](../../docs/design/group-chat-runtime.md) — 完整顶层设计方案（15 节）
+- [docs/showcase/agents/group-chat/runtime.md](../../docs/showcase/agents/group-chat/runtime.md) — 完整顶层设计方案（15 节）
 - [docs/runtime/architecture.md](../../docs/runtime/architecture.md) — Runtime 层架构概览
 - [docs/runtime/io-guide.md](../../docs/runtime/io-guide.md) — 命令参考与交互模式
