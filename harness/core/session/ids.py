@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import uuid
 
@@ -31,7 +32,15 @@ def pid_from_token(token: str) -> int | None:
 
 
 def pid_alive(pid: int) -> bool:
-    """进程是否存活（os.kill(pid, 0) 探活）。"""
+    """进程是否存活（os.kill(pid, 0) 探活）。
+
+    仅限 POSIX：Windows 上 os.kill(pid, 0) 会调用 TerminateProcess
+    杀死被探测进程，因此直接抛 NotImplementedError，禁止静默误用。
+    """
+    if sys.platform == "win32":
+        raise NotImplementedError(
+            "pid_alive is POSIX-only; Windows owner probing not yet supported"
+        )
     try:
         os.kill(pid, 0)
     except (OSError, OverflowError):

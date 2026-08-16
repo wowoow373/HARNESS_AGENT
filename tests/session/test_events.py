@@ -3,7 +3,6 @@
 import pytest
 
 from harness.core.session import events
-from harness.core.session.exceptions import SessionError
 from harness.interfaces.types import Message, ToolCall, ToolCallFunction, ToolCallRecord
 
 
@@ -109,3 +108,19 @@ class TestIds:
     def test_pid_alive_self(self):
         import os
         assert events.pid_alive(os.getpid()) is True
+
+    def test_pid_alive_posix_path(self):
+        """POSIX 路径：自身 pid 探活为 True（win32 上跳过，门禁行为见下）。"""
+        import os
+        import sys
+        if sys.platform == "win32":
+            pytest.skip("pid_alive is POSIX-only")
+        assert events.pid_alive(os.getpid()) is True
+
+    def test_pid_alive_windows_gate(self, monkeypatch):
+        """win32 上门禁生效：抛 NotImplementedError 而非误杀被探测进程。"""
+        import os
+        import sys
+        monkeypatch.setattr(sys, "platform", "win32")
+        with pytest.raises(NotImplementedError):
+            events.pid_alive(os.getpid())

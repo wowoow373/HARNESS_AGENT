@@ -2,7 +2,9 @@
 
 一行一事件（JSONL，UTF-8）。事件类型：
 - header            日志头（每文件第一行，seq=0；缺失/损坏 = 拒绝恢复）
-- user/assistant/tool_result  对话消息（镜像 SessionLog._history）
+- user/assistant/tool_result  对话消息（镜像 SessionLog._history；
+                              仅 user/assistant/tool 三种 role 可持久化，
+                              system 消息按设计不入日志）
 - tool_call         工具执行记录（镜像 SessionLog._tool_call_records）
 - edge              出站消息边（msg_id 配对修复的发送方事实；不入 history）
 - stop              轮次结束
@@ -69,6 +71,8 @@ def decode_event(line: str) -> Dict[str, Any]:
     evt = json.loads(line)
     if not isinstance(evt, dict) or "type" not in evt or "seq" not in evt:
         raise ValueError(f"not a session event line: {line[:80]!r}")
+    if not isinstance(evt["type"], str) or not isinstance(evt["seq"], int):
+        raise ValueError(f"malformed session event line: {line[:80]!r}")
     return evt
 
 
@@ -89,9 +93,18 @@ def make_header(*, conv_id: str, pid: str, parent: Optional[str],
 
 def make_message_event(message: Message, *, seq: int, lsn: int, ts: float,
                        meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Message → user/assistant/tool_result 事件（按 role 映射）。"""
+    """Message → user/assistant/tool_result 事件（按 role 映射）。
+
+    仅支持 user/assistant/tool 三种 role；其余 role（如 system）
+    按设计不持久化，静默映射会铸造未声明事件类型，故直接抛 ValueError。
+    """
+    evt_type = _MESSAGE_EVT_BY_ROLE.get(message.role)
+    if evt_type is None:
+        raise ValueError(
+            f"unsupported message role for session event: {message.role!r}"
+        )
     evt: Dict[str, Any] = {
-        "type": _MESSAGE_EVT_BY_ROLE.get(message.role, message.role),
+        "type": evt_type,
         "seq": seq, "lsn": lsn, "ts": ts,
         "message": message_to_dict(message),
     }
