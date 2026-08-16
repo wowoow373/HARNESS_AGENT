@@ -34,6 +34,23 @@ class TestSessionConfig:
         cfg = load_session_config(str(p))
         assert cfg.enabled is True
 
+    def test_top_level_list_falls_back_to_defaults(self, tmp_path):
+        """顶层 YAML 解析为 list（合法但非 dict）→ 回退默认值。"""
+        p = tmp_path / "harness.yaml"
+        p.write_text("- a\n- b\n", encoding="utf-8")
+        cfg = load_session_config(str(p))
+        assert cfg.enabled is True and cfg.root == "./sessions"
+
+    def test_non_dict_sessions_section_falls_back_to_defaults(self, tmp_path):
+        """sessions: 节为非 dict（list/int）→ 回退默认值。"""
+        p = tmp_path / "harness.yaml"
+        p.write_text("sessions:\n  - x\n", encoding="utf-8")
+        cfg = load_session_config(str(p))
+        assert cfg.enabled is True and cfg.root == "./sessions"
+        p.write_text("sessions: 5\n", encoding="utf-8")
+        cfg = load_session_config(str(p))
+        assert cfg.enabled is True and cfg.root == "./sessions"
+
 
 class TestSequencer:
     def test_monotonic_from_zero(self):
