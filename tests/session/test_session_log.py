@@ -1,7 +1,12 @@
 """SessionLog —— 内存真相 + 记录点 + flush/finalize + seed 测试。"""
 
 import json
+import os
 
+import pytest
+
+from harness.core.session import events
+from harness.core.session.replay import load_agent_log
 from harness.core.session.session_log import SessionLog
 from harness.core.session.store import SessionStore
 from harness.interfaces.types import Message, ToolCallRecord
@@ -20,6 +25,13 @@ def _read_events(store, pid):
     path = store.agent_log_path(pid)
     return [json.loads(l) for l in
             path.read_text(encoding="utf-8").splitlines()]
+
+
+def _batch_lines(*seqs):
+    """构造带指定 seq 的编码事件行（fallback 对账只读 seq）。"""
+    return [events.encode_event(
+        events.make_stop_event(stop_reason="end_turn", seq=s, lsn=s, ts=1.0)
+    ) for s in seqs]
 
 
 class TestRecordPoints:
@@ -65,9 +77,7 @@ class TestRecordPoints:
 
     def test_lsn_from_shared_sequencer(self, tmp_path):
         store, log = _make_log(tmp_path)
-        _, log2 = _make_log(tmp_path, pid="b")  # 同一 store → 同一 Sequencer
-        # 注意：_make_log 又建了一个 store——改用同一 store 验证
-        log2 = store.create_log("b")
+        log2 = store.create_log("b")  # 同一 store → 同一 Sequencer
         log.record_message(Message(role="user", content="a"))   # header lsn0, user lsn1
         log2.record_message(Message(role="user", content="b"))  # header lsn2, user lsn3
         lsns = [json.loads(l)["lsn"] for l in log._pending]
@@ -86,6 +96,21 @@ class TestRecordPoints:
         assert len(calls) == 1
         header = json.loads(log._pending[0])
         assert header["manifest_sha1"] != ""
+
+    def test_record_message_invalid_role_does_not_mutate(self, tmp_path):
+        """Critical 2：先校验后变异——非法 role 抛出，history/_seq/_pending/sequencer 全不变。"""
+        store, log = _make_log(tmp_path)
+        log.begin()  # header 入缓冲，建立基线
+        seq0, lsn0 = log._seq, log.last_lsn
+        pending0 = list(log._pending)
+        next_lsn0 = log._sequencer.next_value
+        with pytest.raises(ValueError):
+            log.record_message(Message(role="system", content="x"))
+        assert len(log.history) == 0
+        assert log._seq == seq0
+        assert log.last_lsn == lsn0
+        assert log._pending == pending0
+        assert log._sequencer.next_value == next_lsn0
 
 
 class TestFlushFinalize:
@@ -138,6 +163,19 @@ class TestFlushFinalize:
         assert list(tmp_path.iterdir()) == []  # 零落盘
         assert log.history[0].content == "x"   # 内存真相仍在
 
+    @run_async
+    async def test_flush_finalize_after_store_close_drop_batch(self, tmp_path):
+        """Minor 4：writer 已关闭（store.close 后）→ 丢批返回，不 enqueue（修复前永久挂起）。"""
+        store, log = _make_log(tmp_path)
+        log.record_message(Message(role="user", content="a"))
+        await log.flush()
+        await store.close()          # writer 已关闭
+        log.record_message(Message(role="user", content="b"))
+        await log.flush()            # 丢批返回
+        await log.finalize(status="paused", final_output="", execution_time=0.0)
+        assert log.finalized
+        assert log._pending == []
+
 
 class TestSeed:
     @run_async
@@ -162,6 +200,90 @@ class TestSeed:
         assert evts[-1]["message"]["content"] == "第二轮"
         assert log2.history[0].content == "第一轮"  # 播种在内存
         await store2.close()
+
+    def test_seed_rejects_negative_last_seq(self, tmp_path):
+        """Minor 5：last_seq < 0 会让首行不是 header（seq=0 被占），直接拒绝误用。"""
+        store, log = _make_log(tmp_path)
+        with pytest.raises(AssertionError):
+            log.seed(history=[], tool_call_records=[], last_seq=-1, last_lsn=-1)
+
+
+class TestFinalizeFallback:
+    """Important 3：降级路径 —— 对账感知 fallback 的端到端与对账矩阵。"""
+
+    @staticmethod
+    def _preset(store, pid, lines, *, half_line=None):
+        """预置 agents/<pid>.jsonl 内容（可选末尾半截行、无尾换行）。"""
+        path = store.agent_log_path(pid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = "".join(l + "\n" for l in lines)
+        if half_line is not None:
+            text += half_line
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _seqs_on_disk(path):
+        return [json.loads(l)["seq"]
+                for l in path.read_text(encoding="utf-8").splitlines()]
+
+    @run_async
+    async def test_finalize_fsync_failure_recovers_via_reconciliation(self,
+                                                                      tmp_path,
+                                                                      monkeypatch):
+        """端到端：write+flush 成功、fsync 抛 OSError → writer 降级 →
+        fallback 对账发现批次已完整落盘 → 不重复追加，日志可恢复。"""
+        store, log = _make_log(tmp_path)
+        log.record_message(Message(role="user", content="你好"))
+
+        def boom(fd):
+            raise OSError("fsync boom")
+        monkeypatch.setattr(os, "fsync", boom)
+
+        await log.finalize(status="paused", final_output="再见", execution_time=1.0)
+        assert store.writer_for("root").degraded
+
+        result = load_agent_log(store.agent_log_path("root"))
+        assert result.status == "paused"
+        assert result.last_seq == 2
+        lines = store.agent_log_path("root").read_text(encoding="utf-8").splitlines()
+        assert sum(1 for l in lines if json.loads(l)["type"] == "session_end") == 1
+        assert [json.loads(l)["seq"] for l in lines] == [0, 1, 2]  # 无重复行
+        await store.close()
+
+    def test_fallback_skips_when_batch_already_on_disk(self, tmp_path):
+        """a) 盘上 seq 0-4、batch seq 3-4 → 批次已完整在盘上，跳过无追加。"""
+        store, log = _make_log(tmp_path)
+        path = self._preset(store, "root", _batch_lines(0, 1, 2, 3, 4))
+        before = path.read_bytes()
+        log._finalize_fallback(_batch_lines(3, 4))
+        assert path.read_bytes() == before
+
+    def test_fallback_appends_only_missing_suffix(self, tmp_path):
+        """b) 盘上 seq 0-2、batch seq 2-4 → 只追加缺失的 3-4。"""
+        store, log = _make_log(tmp_path)
+        path = self._preset(store, "root", _batch_lines(0, 1, 2))
+        log._finalize_fallback(_batch_lines(2, 3, 4))
+        assert self._seqs_on_disk(path) == [0, 1, 2, 3, 4]
+
+    def test_fallback_skips_on_seq_gap(self, tmp_path):
+        """c) 盘上 seq 0-1、batch seq 3-4（断档）→ 跳过且文件不变。"""
+        store, log = _make_log(tmp_path)
+        path = self._preset(store, "root", _batch_lines(0, 1))
+        before = path.read_bytes()
+        log._finalize_fallback(_batch_lines(3, 4))
+        assert path.read_bytes() == before
+
+    def test_fallback_truncates_half_line_then_appends(self, tmp_path):
+        """d) 文件末尾半截行 → 先物理截断，再按对账规则追加缺失后缀。"""
+        store, log = _make_log(tmp_path)
+        path = self._preset(store, "root", _batch_lines(0, 1, 2),
+                            half_line='{"type": "stop", "seq": 3')
+        log._finalize_fallback(_batch_lines(3, 4))
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert [json.loads(l)["seq"] for l in lines] == [0, 1, 2, 3, 4]
+        for l in lines:
+            events.decode_event(l)  # 全部可解码（无字节拼接）
 
 
 class TestFinalizeAgentIntegration:

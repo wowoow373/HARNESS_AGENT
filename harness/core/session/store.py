@@ -52,6 +52,11 @@ class _LogWriter:
 
     # ── 生产者侧（event loop 内调用，零 I/O）──
 
+    @property
+    def closed(self) -> bool:
+        """writer 已关闭（close 后不再接受批次——enqueue 将无人 drain，屏障永久挂起）。"""
+        return self._task is None
+
     def start(self) -> None:
         assert self._task is None, "writer already started"
         self._task = asyncio.create_task(self._run())
@@ -222,6 +227,8 @@ class SessionStore:
 
         enabled=False 时同样创建（store 不可写 → SessionLog 纯内存运行，
         保持"唯一咽喉点"语义不随配置分叉）。
+        boot 路径须在 restore_sequencer 之后再调用
+        （Sequencer 按引用捕获，restore 会替换对象）。
         """
         from .session_log import SessionLog
 
