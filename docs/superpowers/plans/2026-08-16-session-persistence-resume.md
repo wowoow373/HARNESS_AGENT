@@ -1655,6 +1655,11 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'harness.core.session.s
 
 `harness/core/session/session_log.py`：
 
+> **【质量评审修订回写】** 本节代码块已按 T5 质量评审结论更新（两个计划级缺陷修复）：
+> ① `_finalize_fallback` 由盲目追加改为**对账感知**（盲目追加会把可恢复日志变成拒绝恢复：fsync 失败时批次已完整落盘，再追加即重复行 → seq gap）；
+> ② `record_message` 改为**先校验后变异**（原顺序在 make_message_event 对非法 role 抛 ValueError 前已 append history + 烧掉 seq → 盘上断档）。
+> 另含次要加固：flush/finalize 遇已关闭 writer 丢批返回（修复前永久挂起）、seed 断言 last_seq >= 0、manifest_sha1 顶层导入、`_read_ondisk_last_seq` 物理截断半截尾行。
+
 ```python
 """SessionLog —— 每 agent 一份的会话日志（唯一咽喉点）。
 
@@ -1669,13 +1674,16 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'harness.core.session.s
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ...interfaces.types import Message, ToolCallRecord
 from . import events
+from .manifest import manifest_sha1
 from .sequencer import Sequencer
 
 logger = logging.getLogger(__name__)
@@ -1743,7 +1751,6 @@ class SessionLog:
                 logger.warning("manifest_provider failed for '%s': %s", self.pid, e)
         sha = ""
         if manifest:
-            from .manifest import manifest_sha1
             sha = manifest_sha1(manifest)
             if self._store is not None:
                 self._store.note_manifest(self.pid, manifest)
@@ -1755,12 +1762,20 @@ class SessionLog:
 
     def record_message(self, message: Message, *,
                        meta: Optional[Dict[str, Any]] = None) -> None:
-        """R1/R2/R3b/R4a：history 变异点镜像写入。"""
+        """R1/R2/R3b/R4a：history 变异点镜像写入（先校验后变异）。
+
+        非法 role（如 system）在 make_message_event 抛出——此刻零副作用；
+        事件构造成功后才 append history、推进 seq/lsn（先 peek 后 commit），
+        避免内存真相被污染 / seq 被烧掉导致盘上断档。
+        """
         self.begin()
+        evt = events.make_message_event(message, seq=self._seq,
+                                        lsn=self._sequencer.next_value,
+                                        ts=time.time(), meta=meta)
         self._history.append(message)
-        seq, lsn, ts = self._next()
-        self._append(events.make_message_event(message, seq=seq, lsn=lsn, ts=ts,
-                                               meta=meta))
+        self._seq += 1
+        self._last_lsn = self._sequencer.next()
+        self._append(evt)
 
     def record_tool_call(self, record: ToolCallRecord) -> None:
         """R3a：工具执行记录（Hook 之后的终值）。"""
@@ -1795,7 +1810,13 @@ class SessionLog:
             self._pending.clear()
             return
         batch, self._pending = self._pending, []
-        barrier = self._ensure_writer().enqueue(batch)
+        writer = self._ensure_writer()
+        if writer is None or writer.closed:
+            # store.close() 之后 enqueue 将无人 drain（barrier 永久挂起）——丢批返回
+            logger.warning("flush after writer closed for '%s': dropping %d lines",
+                           self.pid, len(batch))
+            return
+        barrier = writer.enqueue(batch)
         await barrier.wait()
 
     async def finalize(self, *, status: str, final_output: str,
@@ -1818,6 +1839,11 @@ class SessionLog:
             return
         batch, self._pending = self._pending, []
         writer = self._ensure_writer()
+        if writer is None or writer.closed:
+            # store.close() 之后 enqueue 将无人 drain（barrier 永久挂起）——丢批返回
+            logger.warning("finalize after writer closed for '%s': dropping %d lines",
+                           self.pid, len(batch))
+            return
         barrier = writer.enqueue_final(batch)
         await barrier.wait()
         if writer.degraded:
@@ -1829,6 +1855,7 @@ class SessionLog:
              tool_call_records: List[ToolCallRecord],
              last_seq: int, last_lsn: int) -> None:
         """重放结果直接装入内存（重放永不重复写）。seq 续接 last_seq+1。"""
+        assert last_seq >= 0, "seed last_seq 必须 >= 0（首行须为 header seq=0）"
         self._history.extend(history)
         self._tool_call_records.extend(tool_call_records)
         self._seq = last_seq + 1
@@ -1857,17 +1884,62 @@ class SessionLog:
         return self._writer
 
     def _finalize_fallback(self, batch: List[str]) -> None:
-        """writer 降级后的 finalize 兜底：内存快照同步直写一次。"""
+        """writer 降级后的 finalize 兜底：对账感知，只补盘上缺失的 seq 后缀。
+
+        盲目追加会把可恢复日志变成拒绝恢复（重复行/断档 = seq gap），故：
+        - suffix（batch 中 seq > ondisk_last_seq 的行）为空 → 批次已完整
+          在盘上（write+flush 成功、fsync 失败），直接返回
+        - suffix[0].seq == ondisk_last_seq + 1 → 追加 suffix + flush + fsync
+        - 否则（中间有空洞/分叉）→ 只记录 error，不再恶化已不一致的状态
+        """
         try:
             path = self._store.agent_log_path(self.pid)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            ondisk_last_seq = self._read_ondisk_last_seq(path)
+            suffix = [l for l in batch if json.loads(l)["seq"] > ondisk_last_seq]
+            if not suffix:
+                logger.info("finalize fallback: batch already on disk for '%s'",
+                            self.pid)
+                return
+            if json.loads(suffix[0])["seq"] != ondisk_last_seq + 1:
+                logger.error(
+                    "finalize fallback: seq divergence for '%s' "
+                    "(ondisk_last=%d, batch_head=%d) — skip",
+                    self.pid, ondisk_last_seq, json.loads(suffix[0])["seq"])
+                return
             with open(path, "a", encoding="utf-8") as fh:
-                fh.write("\n".join(batch) + "\n")
+                fh.write("\n".join(suffix) + "\n")
                 fh.flush()
                 os.fsync(fh.fileno())
             logger.warning("finalize fallback snapshot written for '%s'", self.pid)
         except Exception as e:
             logger.error("finalize fallback failed for '%s': %s", self.pid, e)
+
+    def _read_ondisk_last_seq(self, path: Path) -> int:
+        """容错读取盘上 last_seq（文件不存在/为空 = -1）。
+
+        末字节非换行 → r+b 物理截断半截尾行（防 fallback 字节拼接到半截行尾）；
+        逐行 decode，遇首个不可解码行停止（视为尾部截断点）。
+        """
+        if not path.exists():
+            return -1
+        raw = path.read_bytes()
+        if not raw:
+            return -1
+        if not raw.endswith(b"\n"):
+            cut = raw.rfind(b"\n")  # -1 → 整文件仅半截行，清空
+            with open(path, "r+b") as fh:
+                fh.truncate(cut + 1)
+            raw = raw[:cut + 1]
+        last_seq = -1
+        for line in raw.splitlines():
+            try:
+                evt = json.loads(line)
+                if not isinstance(evt, dict) or not isinstance(evt.get("seq"), int):
+                    raise ValueError("not an event line")
+            except ValueError:  # JSONDecodeError/UnicodeDecodeError 均属之
+                break
+            last_seq = evt["seq"]
+        return last_seq
 ```
 
 `harness/core/session/store.py` 追加 `create_log`（放在 `writer_for` 之后）：
@@ -1879,6 +1951,9 @@ class SessionLog:
 
         enabled=False 时同样创建（store 不可写 → SessionLog 纯内存运行，
         保持"唯一咽喉点"语义不随配置分叉）。
+
+        顺序约束：boot 路径须在 restore_sequencer 之后再调用本方法
+        （Sequencer 按引用捕获，restore_sequencer 会替换对象）。
         """
         from .session_log import SessionLog
 
