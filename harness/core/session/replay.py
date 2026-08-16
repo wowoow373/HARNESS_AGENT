@@ -175,6 +175,8 @@ def _edge_from_talk_to(record: ToolCallRecord, *, source_pid: str) -> Optional[E
         payload = json.loads(record.result) if isinstance(record.result, str) else {}
     except json.JSONDecodeError:
         return None
+    if not isinstance(payload, dict):
+        return None
     msg_id = payload.get("msg_id")
     if not msg_id:
         return None

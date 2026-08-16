@@ -149,6 +149,20 @@ class TestEdgesAndMsgIds:
         assert r.edges[0].to_pid == "b"
         assert r.edges[0].text == "在吗"
 
+    def test_talk_to_non_dict_result_yields_no_edge(self, tmp_path):
+        """talk_to 结果为合法 JSON 非对象（如 '"ok"'）→ 不产出边，且不崩溃。"""
+        _conv(tmp_path, "root", [
+            _header("root"),
+            _user(1, 1, "呼叫 b"),
+            {"type": "tool_call", "seq": 2, "lsn": 2, "ts": 1.0,
+             "record": {"tool_call_id": "c10", "tool_name": "talk_to",
+                        "arguments": {"pid": "b", "text": "在吗"},
+                        "result": '"ok"',
+                        "started_at": 1.0, "finished_at": 1.1, "error": None}},
+        ])
+        r = load_agent_log(tmp_path / "conv-1" / "agents" / "root.jsonl")
+        assert r.edges == []
+
 
 class TestScanAndGap:
     def test_scan_session_multi_agents(self, tmp_path):
