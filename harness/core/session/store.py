@@ -216,6 +216,26 @@ class SessionStore:
     def writer_for(self, pid: str) -> Optional[_LogWriter]:
         return self._writers.get(pid)
 
+    def create_log(self, pid: str, *, parent: Optional[str] = None,
+                   manifest_provider=None):
+        """为 agent 创建 SessionLog（writer 懒创建于首次 flush）。
+
+        enabled=False 时同样创建（store 不可写 → SessionLog 纯内存运行，
+        保持"唯一咽喉点"语义不随配置分叉）。
+        """
+        from .session_log import SessionLog
+
+        log = SessionLog(
+            conv_id=self._conv_id or "ephemeral",
+            pid=pid,
+            store=self,
+            sequencer=self._sequencer,
+            parent=parent,
+            manifest_provider=manifest_provider,
+        )
+        self._logs[pid] = log
+        return log
+
     def restore_sequencer(self, next_lsn: int) -> None:
         """boot 恢复：Sequencer = max(lsn) + 1。"""
         self._sequencer = Sequencer(next_lsn)
