@@ -13,11 +13,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
 
+from .events import FORMAT_VERSION
 from .ids import new_conv_id, new_owner_token
 from .sequencer import Sequencer
 
@@ -163,13 +166,34 @@ class SessionStore:
 
     def begin_session(self, conv_id: Optional[str] = None,
                       *, script: Optional[dict] = None) -> str:
-        """开始（或接管）会话目录。index.json 惰性：此处不写盘（T4 起写）。"""
+        """开始（或接管）会话目录。
+
+        全新会话：创建目录、生成 owner、初始化 index。
+        恢复接管（conv_id 已存在）：保留 created_at/manifest/script/agents，
+        更换 owner token，status 置回 active。
+        """
         self._conv_id = conv_id or new_conv_id()
         if not self._enabled:
             return self._conv_id
         self._conv_dir = self._root / self._conv_id
         (self._conv_dir / "agents").mkdir(parents=True, exist_ok=True)
         self._owner_token = new_owner_token()
+
+        existing = self.read_index(self._conv_id)
+        now = time.time()
+        self._index_data = {
+            "format_version": FORMAT_VERSION,
+            "conv_id": self._conv_id,
+            "status": "active",
+            "owner": {"token": self._owner_token, "acquired_at": now},
+            "manifest": (existing or {}).get("manifest"),
+            "script": script if script is not None else (existing or {}).get("script"),
+            "agents": (existing or {}).get("agents", {}),
+            "created_at": (existing or {}).get("created_at", now),
+            "updated_at": now,
+        }
+        self._agent_index = dict(self._index_data["agents"])
+        self.write_index()
         return self._conv_id
 
     def agent_log_path(self, pid: str) -> Path:
@@ -195,9 +219,91 @@ class SessionStore:
         self._sequencer = Sequencer(next_lsn)
 
     async def close(self) -> None:
-        """进程退出路径：drain 全部 writer → fsync → close。"""
+        """进程退出路径：drain 全部 writer → fsync → close → index 写终态。"""
         for pid, writer in list(self._writers.items()):
             try:
                 await writer.close()
             except Exception as e:
                 logger.error("writer close failed for '%s': %s", pid, e)
+        if self._enabled and self._index_data is not None:
+            self.write_index(status="paused", owner=None, updated_at=time.time())
+
+    # ── index.json 投影（原子重写；可丢失，可重建）──
+
+    def read_index(self, conv_id: str) -> Optional[dict]:
+        """读取 index.json；不存在或损坏返回 None。"""
+        path = self._root / conv_id / "index.json"
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def write_index(self, **patch) -> None:
+        """原子重写 index.json（tmp + os.replace）。投影，随时可重建。"""
+        if not self._enabled or self._conv_dir is None or self._index_data is None:
+            return
+        self._index_data.update(patch)
+        tmp = self._conv_dir / "index.json.tmp"
+        tmp.write_text(
+            json.dumps(self._index_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(tmp, self._conv_dir / "index.json")
+
+    def note_manifest(self, pid: str, manifest: dict) -> None:
+        """记录装配清单。首个上报者（通常 root）的 manifest 入 index。"""
+        if not self._enabled or self._index_data is None:
+            return
+        if not self._index_data.get("manifest"):
+            self.write_index(manifest=manifest, updated_at=time.time())
+
+    async def finalize_agent(self, pid: str, *, final_output: str,
+                             execution_time: float, status: str = "paused") -> None:
+        """agent FINISHED 时的幂等收尾：SessionLog.finalize 兜底 + index 投影更新。
+
+        正常路径 session_end 已在 _phase_end 写入（T6）；这里是防御性兜底
+        （_phase_end 未跑到时补写），并保证 index 的 agents[pid] 被更新。
+        """
+        log = self._logs.get(pid)
+        if log is not None and not log.finalized:
+            await log.finalize(status=status, final_output=final_output,
+                               execution_time=execution_time)
+        if log is not None:
+            self._agent_index[pid] = {
+                "last_seq": log.last_seq,
+                "last_lsn": log.last_lsn,
+                "status": status,
+            }
+            self.write_index(agents=self._agent_index, updated_at=time.time())
+
+    def rebuild_index(self, conv_id: str) -> dict:
+        """index 丢失/损坏时从 agents/*.jsonl 重建投影（惰性导入 replay 避免循环）。"""
+        from .replay import scan_session  # replay 依赖 events，不依赖 store
+
+        conv_dir = self._root / conv_id
+        replays = scan_session(conv_dir)
+        now = time.time()
+        rebuilt = {
+            "format_version": FORMAT_VERSION,
+            "conv_id": conv_id,
+            "status": "crashed",  # 有日志但无 index = 崩溃痕迹
+            "owner": None,
+            "manifest": None,
+            "script": None,
+            "agents": {
+                pid: {"last_seq": r.last_seq, "last_lsn": r.max_lsn,
+                      "status": r.status}
+                for pid, r in replays.items()
+            },
+            "created_at": now,
+            "updated_at": now,
+            "rebuilt": True,
+        }
+        path = conv_dir / "index.json"
+        tmp = conv_dir / "index.json.tmp"
+        tmp.write_text(json.dumps(rebuilt, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        os.replace(tmp, path)
+        return rebuilt
