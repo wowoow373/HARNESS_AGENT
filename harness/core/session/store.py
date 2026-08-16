@@ -192,7 +192,9 @@ class SessionStore:
             "created_at": (existing or {}).get("created_at", now),
             "updated_at": now,
         }
-        self._agent_index = dict(self._index_data["agents"])
+        # _agent_index 与 _index_data["agents"] 同一引用：
+        # finalize_agent 改它后经 write_index(agents=...) 落盘
+        self._agent_index = self._index_data["agents"]
         self.write_index()
         return self._conv_id
 
@@ -231,26 +233,33 @@ class SessionStore:
     # ── index.json 投影（原子重写；可丢失，可重建）──
 
     def read_index(self, conv_id: str) -> Optional[dict]:
-        """读取 index.json；不存在或损坏返回 None。"""
+        """读取 index.json；不存在、损坏（含非 dict 的合法 JSON）返回 None。"""
         path = self._root / conv_id / "index.json"
         if not path.is_file():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):  # ValueError 覆盖 JSONDecodeError 与 UnicodeDecodeError
             return None
+        return data if isinstance(data, dict) else None
 
     def write_index(self, **patch) -> None:
-        """原子重写 index.json（tmp + os.replace）。投影，随时可重建。"""
+        """原子重写 index.json（tmp + os.replace）。投影，随时可重建。
+
+        失败方向向下：OSError 只记录不升级——为可重建的投影崩对话路径是本末倒置。
+        """
         if not self._enabled or self._conv_dir is None or self._index_data is None:
             return
         self._index_data.update(patch)
         tmp = self._conv_dir / "index.json.tmp"
-        tmp.write_text(
-            json.dumps(self._index_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(tmp, self._conv_dir / "index.json")
+        try:
+            tmp.write_text(
+                json.dumps(self._index_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp, self._conv_dir / "index.json")
+        except OSError as e:
+            logger.error("index.json write failed (rebuildable projection): %s", e)
 
     def note_manifest(self, pid: str, manifest: dict) -> None:
         """记录装配清单。首个上报者（通常 root）的 manifest 入 index。"""
@@ -279,7 +288,11 @@ class SessionStore:
             self.write_index(agents=self._agent_index, updated_at=time.time())
 
     def rebuild_index(self, conv_id: str) -> dict:
-        """index 丢失/损坏时从 agents/*.jsonl 重建投影（惰性导入 replay 避免循环）。"""
+        """index 丢失/损坏时从 agents/*.jsonl 重建投影（惰性导入 replay 避免循环）。
+
+        调用顺序约束：仅可在 begin_session 接管前调用；
+        对已打开的会话调用，重建结果会被后续 close() 的终态写覆盖。
+        """
         from .replay import scan_session  # replay 依赖 events，不依赖 store
 
         conv_dir = self._root / conv_id
