@@ -1,5 +1,11 @@
-"""harness.core.session — 内核级会话持久化与恢复（T1 临时导出）。"""
+"""harness.core.session — 内核级会话持久化与恢复。"""
 
+from .config import SessionConfig, load_session_config
 from .exceptions import BootError, CorruptLogError, SessionError, SessionOwnerConflict
+from .sequencer import Sequencer
 
-__all__ = ["SessionError", "CorruptLogError", "SessionOwnerConflict", "BootError"]
+__all__ = [
+    "SessionConfig", "load_session_config",
+    "SessionError", "CorruptLogError", "SessionOwnerConflict", "BootError",
+    "Sequencer",
+]

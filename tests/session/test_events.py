@@ -124,3 +124,19 @@ class TestIds:
         monkeypatch.setattr(sys, "platform", "win32")
         with pytest.raises(NotImplementedError):
             events.pid_alive(os.getpid())
+
+
+class TestContractPins:
+    def test_make_message_event_rejects_unknown_role(self):
+        import pytest as _pytest
+        from harness.interfaces.types import Message as _Msg
+        with _pytest.raises(ValueError, match="unsupported message role"):
+            events.make_message_event(_Msg(role="system", content="x"),
+                                      seq=1, lsn=1, ts=1.0)
+
+    def test_decode_rejects_wrong_value_types(self):
+        import pytest as _pytest
+        with _pytest.raises(ValueError):
+            events.decode_event('{"type": "user", "seq": "abc"}')
+        with _pytest.raises(ValueError):
+            events.decode_event('{"type": 1, "seq": 0}')
