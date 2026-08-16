@@ -15,11 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
 
-from .events import FORMAT_VERSION
 from .ids import new_conv_id, new_owner_token
 from .sequencer import Sequencer
 
@@ -71,6 +69,10 @@ class _LogWriter:
         """drain → fsync → close。幂等。"""
         if self._task is None:
             return
+        if self._task.done():
+            # 任务已死（如被外部取消）：队列无人 drain，入队只会挂起，直接放弃
+            self._task = None
+            return
         done = asyncio.Event()
         self._queue.put_nowait(_Batch([], fsync=True, barrier=done, close=True))
         await done.wait()
@@ -100,6 +102,8 @@ class _LogWriter:
     # ── 线程内（唯一触盘处）──
 
     def _write_batch(self, batch: _Batch) -> None:
+        if self._fh is None and not batch.lines:
+            return  # 无数据批次不建文件；屏障由 _run 的 finally 置位
         if self._fh is None:  # 懒打开
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._fh = open(self._path, "a", encoding="utf-8")

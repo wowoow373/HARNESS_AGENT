@@ -62,10 +62,34 @@ class TestLogWriter:
 
     @run_async
     async def test_close_idempotent(self, tmp_path):
-        writer = _LogWriter(tmp_path / "c.jsonl")
+        path = tmp_path / "c.jsonl"
+        writer = _LogWriter(path)
         writer.start()
         await writer.close()
         await writer.close()  # 第二次不抛异常
+        assert not path.exists()  # 从未 flush 数据 → 懒打开不建文件
+
+    @run_async
+    async def test_fsync_only_at_finalize_and_close(self, tmp_path, monkeypatch):
+        """fsync 纪律：普通批次不 fsync；只在 finalize/close 触达持久介质。"""
+        count = 0
+        real_fsync = os.fsync
+
+        def spy(fd):
+            nonlocal count
+            count += 1
+            return real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", spy)
+        writer = _LogWriter(tmp_path / "d.jsonl")
+        writer.start()
+        await writer.enqueue(['{"seq":1}']).wait()
+        await writer.enqueue(['{"seq":2}']).wait()
+        assert count == 0
+        await writer.enqueue_final(['{"seq":3,"type":"session_end"}']).wait()
+        assert count == 1
+        await writer.close()
+        assert count == 2
 
 
 class TestSessionStoreCore:
