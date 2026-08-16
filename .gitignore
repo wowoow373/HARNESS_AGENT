@@ -28,3 +28,6 @@ memory/group_chat/
 memory/customer_service/
 agents/chat-web/memory/
 agents/group-chat/__pycache__/
+
+# 会话持久化运行产物
+sessions/
