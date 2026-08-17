@@ -4123,6 +4123,13 @@ git add harness/runtime/tools.py harness/runtime/message_bus.py harness/runtime/
 git commit -m "feat(session): stamp msg_id at mediation points and record sender-side edges"
 ```
 
+**T11 【执行期修订】（质量审查 2 Important + 3 Minor，commit 9181207 + 8327db0）：**
+
+1. **child_finished 不落 edge**：计划 3d 要求 child 的 SessionLog `record_edge(kind="child_finished")`——但 child log 在 `_phase_end` 已 `_finalized`+fsync，之后 record_edge 只进 `_pending` 且再无 flush → 确定性永不落盘，且白烧 Sequencer lsn（误导性 LSN 空洞告警）。**修订为删除该 edge**，保留 child_finished UserRequest 的 `from`/`msg_id` 盖章。T12 规则 2 重投 child_finished 依赖 child.status（session_end）+ parent.user_metas（`from==child`），不依赖此 edge。
+2. **KBA sender log 惰性解析**：计划 3c 要求经 `_make_session_log` 把 `_session_log` 挂到 adapter——但 custom adapter（FlexibleGroupChatInputAdapter/AtomicOutputAdapter）内部 KBA 的 `_session_log` 恒 None → 其 publish/direct 静默丢边。修订为 `_record_edges` 直接 `store.log_for(self._pid)` 惰性解析，删除所有 `_session_log` 接线；`_record_edges` 循环体包 try/except（永不因记录失败打断投递）。
+3. **计划 3e 尾「agent_results 每项增加 entry_prompt 字段」未实现**：无消费者（T12 规则 3 的 `script_entry_prompts` 可由 `decorators._agent_registry` 重建），暂不补，T12 集成时从 registry 收集即可。
+4. **spawn_entry 确定性 msg_id** 注释：同一 spawn 幂等；同会话重复 spawn 同名 workflow 会撞 msg_id（T12 按 msg_id 去重，可接受）。
+
 ---
 
 ### Task 12: 配对修复 —— plan_redelivery（msg_id 边规则 + child_finished 规则 + Mode B entry 规则）
