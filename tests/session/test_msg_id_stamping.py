@@ -129,3 +129,61 @@ class TestChildFinishedAndSpawnEntry:
         finally:
             import os
             os.unlink(script)
+
+
+class TestEdgeRecording:
+    """F5：发送方事实 edge 的落盘路径与 KBA 惰性解析。"""
+
+    @run_async
+    async def test_spawn_entry_edge_recorded_on_parent_log(self, tmp_path):
+        import os
+        from tests.runtime.test_e2e_workflow import _write_workflow_script
+        script = _write_workflow_script([{"name": "w1", "entry_prompt": "去干活"}])
+        try:
+            kernel, _store = _kernel(tmp_path)
+            root = kernel._create_root(MockHarness())
+            kernel.spawn_from_script(script, parent=root, autostart=False)
+            parent_log = kernel._store.log_for("root")
+            assert parent_log is not None
+            await parent_log.flush()
+            path = kernel._store.agent_log_path("root")
+            rows = [json.loads(line)
+                    for line in path.read_text(encoding="utf-8").splitlines()]
+            assert any(
+                r.get("type") == "edge"
+                and r.get("msg_id") == "spawn_entry:w1"
+                and r.get("to") == "w1"
+                and r.get("kind") == "spawn_entry"
+                for r in rows
+            )
+        finally:
+            os.unlink(script)
+
+    @run_async
+    async def test_kba_record_edges_lazy_resolves_log(self, tmp_path):
+        from harness.runtime.bridge_adapter import KernelBridgeAdapter
+        from harness.runtime.message_bus import StampedEdge
+        kernel, _store = _kernel(tmp_path)
+        root = kernel._create_root(MockHarness())
+        adapter = KernelBridgeAdapter(pid="root", kernel=kernel, runtime=root)
+        adapter._record_edges([StampedEdge(
+            msg_id="M-aaaaaaaa", from_pid="root", to_pid="w1",
+            kind="publish", text="进度",
+        )])
+        pending = kernel._store.log_for("root")._pending
+        assert any(
+            json.loads(line).get("type") == "edge"
+            and json.loads(line).get("msg_id") == "M-aaaaaaaa"
+            and json.loads(line).get("to") == "w1"
+            and json.loads(line).get("kind") == "publish"
+            for line in pending
+        )
+        # 守卫路径：无 store 的 Kernel 上 KBA 不抛
+        kernel2 = Kernel(MockConsole())
+        rt2 = AgentRuntime(pid="root", mode="continuous",
+                           harness=MockHarness(), kernel=kernel2)
+        adapter2 = KernelBridgeAdapter(pid="root", kernel=kernel2, runtime=rt2)
+        adapter2._record_edges([StampedEdge(
+            msg_id="M-bbbbbbbb", from_pid="root", to_pid="w1",
+            kind="publish", text="x",
+        )])  # 不应抛出

@@ -592,6 +592,9 @@ class Kernel:
         # ── Step 9: Deliver entry_prompts ──
         if deliver_entry:
             for name, blueprint in decorators._agent_registry.items():
+                # 确定性 key：同一 spawn 内幂等；同会话重复 spawn 同名
+                # workflow 会产生相同 msg_id 的重复 edge（T12 按 msg_id
+                # 去重，语义可接受）。
                 msg_id = f"spawn_entry:{name}"
                 self.send_input(
                     name,
@@ -832,8 +835,8 @@ class Kernel:
         store 为 None（持久化关闭）时仍创建纯内存 SessionLog——
         "唯一咽喉点"语义不随配置分叉。
 
-        同时把 log 挂到 adapter（若支持 _record_edges），使 KBA 的
-        publish/direct 路径能落发送方事实（edge 事件）。
+        只创建并返回 log；KBA 的发送方事实落盘改为惰性解析
+        （经 kernel._store.log_for(pid)），不再此处接线。
         """
         from ..core.session.session_log import SessionLog
 
@@ -846,9 +849,6 @@ class Kernel:
                 manifest_provider=lambda: self._probe_manifest(harness, runtime),
             )
 
-        adapter = getattr(runtime, "adapter", None)
-        if adapter is not None and hasattr(adapter, "_record_edges"):
-            adapter._session_log = log
         return log
 
     def _probe_manifest(self, harness, runtime) -> dict:
@@ -949,16 +949,6 @@ class Kernel:
                         "msg_id": msg_id,
                     },
                 ))
-                # 发送方事实：child_finished 由内核盖章（发送方 = 子 agent）。
-                child_log = (
-                    self._store.log_for(runtime.pid)
-                    if self._store is not None else None
-                )
-                if child_log is not None:
-                    child_log.record_edge(
-                        msg_id=msg_id, to=runtime.parent.pid,
-                        kind="child_finished", text=text,
-                    )
                 logger.debug(
                     f"_on_agent_finished: child_finished sent to "
                     f"parent='{runtime.parent.pid}'"

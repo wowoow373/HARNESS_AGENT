@@ -17,6 +17,7 @@ Batch 3（已实现）：
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from ..interfaces.async_input_adapter import AsyncInputAdapter
@@ -33,6 +34,8 @@ from .types import AgentOutput, InternalMessage, __EXIT_SENTINEL__
 if TYPE_CHECKING:
     from .agent_runtime import AgentRuntime
     from .kernel import Kernel
+
+logger = logging.getLogger(__name__)
 
 
 class KernelBridgeAdapter:
@@ -53,8 +56,6 @@ class KernelBridgeAdapter:
         self._pid = pid
         self._kernel = kernel
         self._runtime = runtime
-        # SessionLog 由 Kernel._make_session_log 接线（发送方事实的落盘点）。
-        self._session_log = None
 
     # ------------------------------------------------------------------
     # AsyncInputAdapter 实现
@@ -145,12 +146,21 @@ class KernelBridgeAdapter:
     def _record_edges(self, edges) -> None:
         """将 MessageBus 返回的 StampedEdge 落为 SessionLog 的 edge 事件。
 
-        无 SessionLog（持久化关闭且未接线）或无边时直接返回——发送方事实
-        记录是尽力而为，永不因记录失败打断消息投递。
+        sender log 惰性解析：不依赖 _make_session_log 的显式接线，直接经
+        kernel._store.log_for(self._pid) 取（KBA 的 _pid 即发送方 pid）。
+        无 store / 无 log / 无边时直接返回——发送方事实记录是尽力而为，
+        永不因记录失败打断消息投递。
         """
-        if not edges or self._session_log is None:
+        if not edges:
+            return
+        store = getattr(self._kernel, "_store", None)
+        log = store.log_for(self._pid) if store is not None else None
+        if log is None:
             return
         for e in edges:
-            self._session_log.record_edge(
-                msg_id=e.msg_id, to=e.to_pid, kind=e.kind, text=e.text,
-            )
+            try:
+                log.record_edge(
+                    msg_id=e.msg_id, to=e.to_pid, kind=e.kind, text=e.text,
+                )
+            except Exception as exc:
+                logger.warning("record_edge failed for '%s': %s", self._pid, exc)
