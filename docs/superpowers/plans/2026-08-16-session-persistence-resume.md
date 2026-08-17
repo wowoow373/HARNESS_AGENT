@@ -4636,6 +4636,14 @@ git add tests/session/test_e2e.py
 git commit -m "test(session): add end-to-end lifecycle, crash, interruption, and lsn-gap tests"
 ```
 
+**T14 【执行期修订】（commit b31218f）：**
+
+1. **测试暴露两处真实 bug（均修）**：
+   - `store.py` `finalize_agent` 写 index 的 `agents[pid]` 原缺 `final_output`/`execution_time`——补足（与 `_ended_conv` fixture 设计意图一致）。连带更新 `tests/session/test_index.py` 两处旧断言。
+   - `async_orchestrator.py` `_build_trajectory` 的 `final_output` 原取 `_history[-1]`——boot 注入的 user-role `resume_marker`（中断场景尾随）会被当 final_output 泄漏进 `session_end` 落盘，违反「永不落盘」。改为逆向扫描取最后一条 `role=="assistant" and content` 文本（对齐 `_extract_last_output`）。
+2. **计划测试需修正**：run2 的 llm2 spy 断言「旧历史在 LLM 入参可见」，但 `_fallback_assemble`/`_RecordingAssembler` 都不把 `ctx.history` 放进 LLM 入参——补注册 `_HistoryAssembler`（history + 当前 user 组装进 messages）。
+3. **deferred Minors（质量审查 APPROVED，未修）**：`_build_trajectory` 与 `_extract_last_output`/sync `orchestrator.py` 三处重复实现「最后 assistant 文本」应抽取共享 helper；index 的 `execution_time` 与盘上 `session_end.execution_time` 时钟不同源（started_at vs _start_time，轻微分歧）；`rebuild_index` 投影缺 `final_output`/`execution_time`（与 `finalize_agent` 形状不一致，`ReplayResult.final_output` 已可用可零成本补 final_output）；`_HistoryAssembler` 双含当前 user 请求（ctx.history 已预录当前轮）；空串 final 回复语义为「最后非空 assistant 文本」。
+
 ---
 
 ### Task 15: 文档 —— ARCHITECTURE.md 章节、配置说明、README
