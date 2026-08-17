@@ -145,7 +145,8 @@ class Runtime:
         try:
             loop.add_signal_handler(signal.SIGINT, handler)
             logger.debug("SIGINT handler registered")
-        except NotImplementedError:
+        except (NotImplementedError, RuntimeError):
+            # RuntimeError: 非主线程（Unix）——与 remove 侧对称降级
             logger.debug("SIGINT handler not available on this platform")
 
         # 6. 推送启动事件
@@ -162,9 +163,13 @@ class Runtime:
                 loop.remove_signal_handler(signal.SIGINT)
             except (NotImplementedError, RuntimeError):
                 pass
-            # 等所有 agent 收尾（含 spawn_workflow 中途起的子 agent），
-            # 避免其 R6 finalize 撞上 writer 已关闭而丢 session_end
+            # post-sweep spawn 窗口：/exit 落地后在途 LLM 响应仍可能 spawn
+            # 出新 agent（收不到此前的 sentinel）——收尾前再清扫一次
             if self._kernel is not None:
+                self._kernel._signal_all_exit()
+                logger.info("waiting for %d agent(s) to finish: %s",
+                            len(self._kernel._tasks),
+                            list(self._kernel._tasks))
                 await asyncio.gather(*self._kernel._tasks.values(),
                                      return_exceptions=True)
             await self._close_store()
@@ -205,7 +210,8 @@ class Runtime:
         try:
             loop.add_signal_handler(signal.SIGINT, handler)
             logger.debug("SIGINT handler registered (Mode B)")
-        except NotImplementedError:
+        except (NotImplementedError, RuntimeError):
+            # RuntimeError: 非主线程（Unix）——与 remove 侧对称降级
             logger.debug("SIGINT handler not available on this platform")
 
         # 6. 推送启动事件
@@ -235,15 +241,22 @@ class Runtime:
                 await task_sys
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                # task_sys 异常死亡不跳过收尾（gather + _close_store）
+                logger.error("_handle_system_input exited with error: %s", e)
 
             try:
                 loop.remove_signal_handler(signal.SIGINT)
             except (NotImplementedError, RuntimeError):
                 pass
 
-            # 等所有 agent 收尾（含 spawn_workflow 中途起的子 agent），
-            # 避免其 R6 finalize 撞上 writer 已关闭而丢 session_end
+            # post-sweep spawn 窗口：/exit 落地后在途 LLM 响应仍可能 spawn
+            # 出新 agent（收不到此前的 sentinel）——收尾前再清扫一次
             if self._kernel is not None:
+                self._kernel._signal_all_exit()
+                logger.info("waiting for %d agent(s) to finish: %s",
+                            len(self._kernel._tasks),
+                            list(self._kernel._tasks))
                 await asyncio.gather(*self._kernel._tasks.values(),
                                      return_exceptions=True)
             await self._close_store()

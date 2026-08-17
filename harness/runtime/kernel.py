@@ -233,6 +233,23 @@ class Kernel:
         logger.info(f"finish_agent: pid='{pid}'")
         self.kill(pid)
 
+    def _signal_all_exit(self) -> None:
+        """向所有非 FINISHED/TERMINATING agent 置 should_exit + 推 sentinel。
+
+        CommandExit 清扫与 Runtime finally 的再清扫共用：/exit 落地后在途
+        LLM 响应仍可能 spawn 出新 agent（post-sweep spawn 窗口），收尾前
+        须再扫一次保证无孤儿。幂等——重复调用只是多推一个 sentinel。
+        """
+        from .agent_runtime import AgentState
+
+        for pid, agent in self.runtime_table.items():
+            if agent.state not in (
+                AgentState.FINISHED, AgentState.TERMINATING
+            ):
+                agent.should_exit = True
+                if pid in self.input_queues:
+                    self.input_queues[pid].put_nowait(__EXIT_SENTINEL__)
+
     def list_agents(self) -> dict[str, dict]:
         """返回 runtime_table 的只读快照。
 
@@ -277,7 +294,13 @@ class Kernel:
             FileNotFoundError: Script file cannot be loaded.
             ValueError: No @agent declarations, or subscribe references
                         unknown agent names.
+            RuntimeError: Kernel 正在关闭（_shutdown=True）。/exit 后在途
+                        LLM 响应仍可能执行 spawn_workflow——拒绝 spawn，
+                        避免新 agent 收不到退出信号成为孤儿。
         """
+        if self._shutdown:
+            raise RuntimeError("kernel is shutting down, spawn rejected")
+
         import sys
         import importlib.util
         from . import decorators
@@ -789,15 +812,7 @@ class Kernel:
             # ── CommandExit: 优雅退出 ──
             elif isinstance(command, CommandExit):
                 logger.info("_handle_system_input: /exit received")
-                for pid, agent in self.runtime_table.items():
-                    if agent.state not in (
-                        AgentState.FINISHED, AgentState.TERMINATING
-                    ):
-                        agent.should_exit = True
-                        if pid in self.input_queues:
-                            self.input_queues[pid].put_nowait(
-                                __EXIT_SENTINEL__
-                            )
+                self._signal_all_exit()
                 self._shutdown = True
                 return  # 退出循环
 
