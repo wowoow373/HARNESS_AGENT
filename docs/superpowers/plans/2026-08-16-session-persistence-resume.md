@@ -4356,6 +4356,13 @@ git add harness/core/session/replay.py harness/runtime/kernel.py tests/session/t
 git commit -m "feat(session): add cross-log pairing repair with msg_id edge, child_finished, and spawn_entry rules"
 ```
 
+**T12 【执行期修订】（质量审查 1 Important + Minors，commit 318394b）：**
+
+1. **规则 3 放宽为「未收到 spawn_entry（含无旧日志的新 agent）→ 补投」**：原「旧日志存在」限定会让 Mode B resume 时「脚本重跑创建、但上次崩溃在写 header 前」的新 agent（replays 缺失）收不到 entry，`AgentRuntime.run()` 在 `_phase_init` 阻塞空队列 → 永久挂起。改为 `r = replays.get(pid)`，仅当「有旧日志且已收到 `spawn_entry:{pid}`」才跳过。补测试 `test_new_agent_without_old_log_gets_entry`。
+2. **去掉死元数据 `"redelivered": True`**：三条规则的 request metadata 里该键无读取方、也不在 `_request_meta` 白名单（不落盘），误导——删掉。实际去重靠 `report.redelivered` + `received_msg_ids`。
+3. **补类型注解** + 注释澄清：`plan_redelivery` 签名加 Dict/Set/Optional/List 注解；规则 2 注明「restarted 仅含顶层 agent，嵌套子 agent 从不重启」；规则 3 注明确定性 key 无需 seen_keys。
+4. **deferred 未修**：规则 2 的 `aware` 判定按 spec 用 `from==child`（任一 user 事件即视为父已感知，匹配订阅去重语义，talk_to 会让 child_finished 不重投——语义上属 spec 有意为之）；`report.redelivered` 线性 `in` 查找（量小可接受）；`_request_meta` 白名单是否纳入 `redelivered`（如需可观测性再议）。
+
 ---
 
 ### Task 13: CLI/Runtime 入口 —— --resume / --force 接线
