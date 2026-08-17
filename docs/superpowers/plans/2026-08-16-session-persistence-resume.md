@@ -4453,6 +4453,15 @@ git add main.py harness/runtime/runtime.py tests/session/test_cli_resume.py
 git commit -m "feat(session): expose --resume/--force CLI flags routing through kernel.boot"
 ```
 
+**T13 【执行期修订】（commit 8f20d6b + d503fbf）：**
+
+1. **`build_parser` 抽取**：计划测试 `from main import build_parser`，但 main.py 原在 `main()` 内联构建 parser——抽出模块级 `build_parser()`。
+2. **`workflow` 无 `--config`**：`_cmd_workflow` 用 `load_session_config(getattr(args, "config", None))` 回退默认（workflow 子命令未定义 --config，直取会 AttributeError）。
+3. **`WorkflowFinished.workflow_flag` 连锁点**：boot 替换 spawn 后无 `result["workflow_flag"]`，改为从 `runtime_table` 的 `runtime.workflow_flag` 派生。
+4. **deferred 修复**：finally 两处 `_shutdown=True` 置于 `_signal_all_exit()` 前（T7 round-2 Minor #1）；conv_id 格式校验（路径逃逸）；fresh Mode B 记录 script meta（`begin_session(None, script={"path","sha1"})`，Mode B 恢复前提）。
+5. **质量审查 APPROVED 的 Minor（已修）**：fresh Mode B sha1 前补 `os.path.isfile`+`os.access(R_OK)` 校验（与 resume 对称，避免裸 PermissionError）；`--resume` 非 `--runtime` 模式下打印警告而非静默忽略。
+6. **deferred 未修（记录）**：workflow 无 --config 故 Mode B 无法选非默认 sessions.root；`workflow_flag` 派生在 spawn_workflow 子 agent 场景可能取到 child flag（低影响）；`except KeyboardInterrupt` 在 `_run_with_runtime`/`_cmd_workflow` 为死代码（Runtime.run 已吞）；`test_fresh_mode_b_records_script_meta` 的 sha1 断言仅非空。
+
 ---
 
 ### Task 14: 端到端测试 —— 全生命周期、崩溃变体、中断标记、LSN 空洞
