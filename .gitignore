@@ -26,8 +26,10 @@ venv/
 memory/episodic/session_*.md
 memory/group_chat/
 memory/customer_service/
+memory/debate/
+memory/greeter/
 agents/chat-web/memory/
 agents/group-chat/__pycache__/
 
 # 会话持久化运行产物
-sessions/
+.harness/

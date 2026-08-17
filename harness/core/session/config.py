@@ -16,10 +16,12 @@ class SessionConfig:
     """持久化配置。
 
     Attributes:
-        root: 会话存储根目录（sessions/<conv_id>/ 的父目录）。
+        root: 会话存储根目录（<root>/<conv_id>/ 的父目录）。
+              默认 ./.harness/sessions——隐藏目录，避免在项目顶层
+              散落运行产物；相对路径相对进程 CWD 解析。
         enabled: 是否开启持久化。False 时 SessionLog 纯内存运行（零落盘）。
     """
-    root: str = "./sessions"
+    root: str = "./.harness/sessions"
     enabled: bool = True
 
 

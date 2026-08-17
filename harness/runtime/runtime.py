@@ -35,7 +35,7 @@ class Runtime:
     负责创建 Kernel、启动事件循环、注册信号处理。
     Mode A: Runtime(console).run(harness) — 单 agent 交互式对话。
     Mode B: Runtime(console).run_from_script(path) — Batch 3 ✅。
-    每次运行默认在 ./sessions 落盘（可用 session_config 关闭/改路径）。
+    每次运行默认在 ./.harness/sessions 落盘（可用 session_config 关闭/改路径）。
     """
 
     def __init__(self, console: 'SystemConsole', session_config=None):
@@ -44,7 +44,7 @@ class Runtime:
         Args:
             console: SystemConsole 实现（如 CliConsole）。
             session_config: SessionConfig（可选）。None 时使用默认配置
-                            （root=./sessions, enabled=True）。
+                            （root=./.harness/sessions, enabled=True）。
         """
         self._console = console
         self._session_config = session_config

@@ -8,7 +8,7 @@ class TestSessionConfig:
     def test_defaults_when_no_file(self, tmp_path):
         cfg = load_session_config(str(tmp_path / "missing.yaml"))
         assert cfg.enabled is True
-        assert cfg.root == "./sessions"
+        assert cfg.root == "./.harness/sessions"
 
     def test_defaults_when_none_path(self):
         cfg = load_session_config(None)
@@ -26,7 +26,7 @@ class TestSessionConfig:
         p = tmp_path / "harness.yaml"
         p.write_text("llm:\n  model: gpt-4o\n", encoding="utf-8")
         cfg = load_session_config(str(p))
-        assert cfg.enabled is True and cfg.root == "./sessions"
+        assert cfg.enabled is True and cfg.root == "./.harness/sessions"
 
     def test_broken_yaml_falls_back_to_defaults(self, tmp_path):
         p = tmp_path / "harness.yaml"
@@ -39,17 +39,17 @@ class TestSessionConfig:
         p = tmp_path / "harness.yaml"
         p.write_text("- a\n- b\n", encoding="utf-8")
         cfg = load_session_config(str(p))
-        assert cfg.enabled is True and cfg.root == "./sessions"
+        assert cfg.enabled is True and cfg.root == "./.harness/sessions"
 
     def test_non_dict_sessions_section_falls_back_to_defaults(self, tmp_path):
         """sessions: 节为非 dict（list/int）→ 回退默认值。"""
         p = tmp_path / "harness.yaml"
         p.write_text("sessions:\n  - x\n", encoding="utf-8")
         cfg = load_session_config(str(p))
-        assert cfg.enabled is True and cfg.root == "./sessions"
+        assert cfg.enabled is True and cfg.root == "./.harness/sessions"
         p.write_text("sessions: 5\n", encoding="utf-8")
         cfg = load_session_config(str(p))
-        assert cfg.enabled is True and cfg.root == "./sessions"
+        assert cfg.enabled is True and cfg.root == "./.harness/sessions"
 
 
 class TestSequencer:
