@@ -535,7 +535,7 @@ class Kernel:
         )
 
     def _probe_manifest(self, harness, runtime) -> dict:
-        """计算当前装配清单（T9 接入 compute_manifest；此前返回最小集）。"""
+        """计算当前装配清单（T9 接入 compute_manifest；就绪前一律返回 {}）。"""
         try:
             from ..core.session.manifest import compute_manifest
             tools = []

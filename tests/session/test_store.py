@@ -6,6 +6,7 @@ import os
 import pytest
 
 from harness.core.session.store import SessionStore, _LogWriter
+from harness.interfaces.types import Message
 from tests.session._fakes import run_async
 
 
@@ -133,4 +134,48 @@ class TestSessionStoreCore:
         (tmp_path / "blocker").write_text("file", encoding="utf-8")
         await writer.enqueue(['{"seq":1}']).wait()
         assert store.degraded == ["root"]
+        await store.close()
+
+
+class TestCreateLogGuard:
+    """create_log 同名重复注册语义：未开始记录可替换，已开始记录拒绝。"""
+
+    @run_async
+    async def test_same_pid_unstarted_log_is_replaceable(self, tmp_path):
+        """同名 log 从未开始记录（无事件、无 writer）→ 允许覆盖注册。
+
+        spawn_from_script 回滚重试场景：factory 抛错时 agent 1..k-1 的
+        SessionLog 已注册但从未 begun，同会话重试同一脚本不得撞守卫。
+        """
+        store = SessionStore(str(tmp_path))
+        store.begin_session(None)
+        log1 = store.create_log("a")
+        log2 = store.create_log("a")            # 不抛
+        assert store._logs["a"] is log2
+        assert log2 is not log1
+        await store.close()
+
+    @run_async
+    async def test_same_pid_after_record_raises(self, tmp_path):
+        """同名 log 已记录事件（_begun=True）→ ValueError。"""
+        store = SessionStore(str(tmp_path))
+        store.begin_session(None)
+        log1 = store.create_log("a")
+        log1.record_message(Message(role="user", content="hi"))
+        with pytest.raises(ValueError):
+            store.create_log("a")
+        assert store._logs["a"] is log1         # 原注册不被顶掉
+        await store.close()
+
+    @run_async
+    async def test_same_pid_after_flush_raises(self, tmp_path):
+        """同名 log 已 flush（writer 已创建）→ ValueError。"""
+        store = SessionStore(str(tmp_path))
+        store.begin_session(None)
+        log1 = store.create_log("a")
+        log1.record_message(Message(role="user", content="hi"))
+        await log1.flush()
+        assert log1._writer is not None
+        with pytest.raises(ValueError):
+            store.create_log("a")
         await store.close()

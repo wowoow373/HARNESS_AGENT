@@ -231,16 +231,20 @@ class SessionStore:
         （Sequencer 按引用捕获，restore 会替换对象）。
 
         Raises:
-            ValueError: 同一 pid 重复注册。重复注册会替换 _logs[pid]
-                并在首次 flush 时启动第二个 writer 写同一文件
-                （重复 header/seq 分叉，日志不可恢复），故显式拒绝。
+            ValueError: 同名 log 已开始记录（_begun=True）或已持有 writer。
+                重复注册已开始记录的 log 会在首次 flush 时启动第二个
+                writer 写同一文件（重复 header/seq 分叉，日志不可恢复），
+                故显式拒绝。同名 log 从未开始记录且无 writer 时允许覆盖
+                （spawn_from_script 回滚后同会话重试的场景）。
         """
         from .session_log import SessionLog
 
-        if pid in self._logs:
+        existing = self._logs.get(pid)
+        if existing is not None and (existing._begun
+                                     or existing._writer is not None):
             raise ValueError(
                 f"create_log: pid '{pid}' already registered — "
-                f"每个 pid 只允许一份 SessionLog"
+                f"仅允许替换从未开始记录的同名 SessionLog"
             )
         log = SessionLog(
             conv_id=self._conv_id or "ephemeral",

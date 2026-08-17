@@ -35,6 +35,7 @@ class Runtime:
     负责创建 Kernel、启动事件循环、注册信号处理。
     Mode A: Runtime(console).run(harness) — 单 agent 交互式对话。
     Mode B: Runtime(console).run_from_script(path) — Batch 3 ✅。
+    每次运行默认在 ./sessions 落盘（可用 session_config 关闭/改路径）。
     """
 
     def __init__(self, console: 'SystemConsole', session_config=None):
@@ -121,6 +122,8 @@ class Runtime:
             logger.info("Wrapped sync call_llm → async via asyncio.to_thread")
 
         # 2. 创建 Kernel（注入进程级 SessionStore）
+        # 注意：此处起若 Kernel 构造/spawn 抛错，store 永不 close
+        # （index 留 active + 活 owner）——由 T13 boot 的死主检测接管恢复。
         store = self._open_store()
         self._kernel = Kernel(self._console, store=store)
 
@@ -159,6 +162,11 @@ class Runtime:
                 loop.remove_signal_handler(signal.SIGINT)
             except (NotImplementedError, RuntimeError):
                 pass
+            # 等所有 agent 收尾（含 spawn_workflow 中途起的子 agent），
+            # 避免其 R6 finalize 撞上 writer 已关闭而丢 session_end
+            if self._kernel is not None:
+                await asyncio.gather(*self._kernel._tasks.values(),
+                                     return_exceptions=True)
             await self._close_store()
 
         # 8. 推送停止事件
@@ -169,6 +177,8 @@ class Runtime:
         from .kernel import Kernel
 
         # 1. 创建 Kernel（注入进程级 SessionStore）
+        # 注意：此处起若 Kernel 构造/spawn 抛错，store 永不 close
+        # （index 留 active + 活 owner）——由 T13 boot 的死主检测接管恢复。
         store = self._open_store()
         self._kernel = Kernel(self._console, store=store)
 
@@ -231,6 +241,11 @@ class Runtime:
             except (NotImplementedError, RuntimeError):
                 pass
 
+            # 等所有 agent 收尾（含 spawn_workflow 中途起的子 agent），
+            # 避免其 R6 finalize 撞上 writer 已关闭而丢 session_end
+            if self._kernel is not None:
+                await asyncio.gather(*self._kernel._tasks.values(),
+                                     return_exceptions=True)
             await self._close_store()
 
         # 8. 收集最终输出

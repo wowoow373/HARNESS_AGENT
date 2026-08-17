@@ -1,10 +1,14 @@
 """Kernel/Runtime 持久化接线测试。"""
 
+import asyncio
 import json
 
+from harness.core.session.config import SessionConfig
 from harness.core.session.store import SessionStore
 from harness.interfaces.types import UserRequest
 from harness.runtime.kernel import Kernel
+from harness.runtime.runtime import Runtime
+from harness.runtime.types import CommandExit
 from tests.session._fakes import MockConsole, MockHarness, run_async
 
 
@@ -16,6 +20,14 @@ class ExitImmediatelyAdapter:
 
     async def send(self, event, target=None):
         pass
+
+
+class ExitCommandConsole(MockConsole):
+    """receive 返回 CommandExit：驱动 _handle_system_input 退出（task_sys 不悬挂）。"""
+
+    async def receive(self):
+        await asyncio.sleep(0.05)   # 让 root 先跑起来
+        return CommandExit()
 
 
 def _harness_with_exit_adapter():
@@ -74,3 +86,24 @@ class TestKernelWiring:
         await kernel._tasks["worker"]
         await store.close()
         assert store.agent_log_path("worker").exists()
+
+
+class TestRuntimeWiring:
+    """真实入口 Runtime.run 的端到端接线（每个真实 CLI run 走的路径）。"""
+
+    def test_run_persists_session_and_writes_terminal_state(self, tmp_path):
+        """run() 返回后：conv 目录落盘、root.jsonl 首尾完整、index 终态写生效。"""
+        cfg = SessionConfig(root=str(tmp_path / "sessions"))
+        Runtime(ExitCommandConsole(), session_config=cfg).run(
+            _harness_with_exit_adapter())
+
+        conv_dirs = [d for d in (tmp_path / "sessions").iterdir() if d.is_dir()]
+        assert len(conv_dirs) == 1
+        lines = (conv_dirs[0] / "agents" / "root.jsonl").read_text(
+            encoding="utf-8").splitlines()
+        assert [json.loads(l)["type"] for l in lines] == ["header", "session_end"]
+        index = json.loads(
+            (conv_dirs[0] / "index.json").read_text(encoding="utf-8"))
+        assert index["status"] == "paused"      # _close_store 终态写
+        assert index["owner"] is None
+        assert index["agents"]["root"]["status"] == "paused"
