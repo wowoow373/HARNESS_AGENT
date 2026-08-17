@@ -334,6 +334,8 @@ class SessionStore:
                 "last_seq": log.last_seq,
                 "last_lsn": log.last_lsn,
                 "status": status,
+                "final_output": final_output,
+                "execution_time": execution_time,
             }
             self.write_index(agents=self._agent_index, updated_at=time.time())
 

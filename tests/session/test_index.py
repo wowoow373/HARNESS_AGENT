@@ -175,7 +175,8 @@ class TestFinalizeAgent:
         assert fake.finalize_calls == [
             {"status": "done", "final_output": "bye", "execution_time": 1.5}]
         agent = store.read_index(conv_id)["agents"]["root"]
-        assert agent == {"last_seq": 7, "last_lsn": 42, "status": "done"}
+        assert agent == {"last_seq": 7, "last_lsn": 42, "status": "done",
+                         "final_output": "bye", "execution_time": 1.5}
         await store.close()
 
     @run_async
@@ -188,5 +189,6 @@ class TestFinalizeAgent:
         await store.finalize_agent("a", final_output="x", execution_time=0.1)
         assert fake.finalize_calls == []
         agent = store.read_index(conv_id)["agents"]["a"]
-        assert agent == {"last_seq": 7, "last_lsn": 42, "status": "paused"}
+        assert agent == {"last_seq": 7, "last_lsn": 42, "status": "paused",
+                         "final_output": "x", "execution_time": 0.1}
         await store.close()

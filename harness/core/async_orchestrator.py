@@ -672,9 +672,13 @@ class AsyncLifecycleOrchestrator:
         """
         execution_time = time.time() - self._start_time
         final_output = ""
-        if self._history:
-            last = self._history[-1]
-            final_output = last.content if last else ""
+        # final_output = agent 最后一条文本回复（而非 history 的尾元素——
+        # 尾元素可能是 boot 注入的 resume_marker（user 角色）或 tool 消息，
+        # 那会把系统标记/工具结果当作最终输出；与 _extract_last_output 对齐）
+        for msg in reversed(self._history):
+            if msg.role == "assistant" and msg.content:
+                final_output = msg.content
+                break
 
         return Trajectory(
             session_id=self._session_id,
