@@ -1,6 +1,7 @@
 """Kernel.boot —— fresh/resume 统一入口、所有权、manifest 校验、种子恢复。"""
 
 import json
+import sys
 
 import pytest
 
@@ -8,8 +9,10 @@ from harness.core.session.boot import BootReport
 from harness.core.session.exceptions import BootError, SessionOwnerConflict
 from harness.core.session.ids import new_msg_id
 from harness.core.session.store import SessionStore
-from harness.interfaces import ContextAssembler
-from harness.interfaces.types import Message, Response, UserRequest
+from harness.interfaces import ContextAssembler, SystemToolProvider
+from harness.interfaces.types import (
+    Message, Response, ToolDefinition, UserRequest,
+)
 from harness.runtime.kernel import Kernel
 from tests.session._fakes import MockConsole, MockHarness, run_async
 from tests.session.test_kernel_wiring import ExitImmediatelyAdapter
@@ -74,6 +77,67 @@ def _ended_conv(tmp_path, conv_id="conv-1"):
     }), encoding="utf-8")
 
 
+class _SearchProvider:
+    """SystemToolProvider 替身：只提供 search 工具。"""
+
+    def get_tools(self):
+        return [ToolDefinition(name="search")]
+
+    def execute(self, name, args):
+        return None
+
+
+def _runtime_tool_names():
+    """_inject_runtime_tools 注入的 runtime 工具名集合（动态取，防硬编码漂移）。"""
+    from harness.runtime.tools import create_runtime_tools
+    probe_kernel = Kernel(MockConsole())
+    return {t.get_definition().name
+            for t in create_runtime_tools(kernel=probe_kernel, pid="root")}
+
+
+def _tool_conv(tmp_path, conv_id="conv-tools", tool_names=()):
+    """构造一个用过 search 工具的已结束会话（tool_call 已闭合）。
+
+    index manifest 记录 SystemToolProvider.tool_names=tool_names
+    （调用方负责与本次 boot 探针将看到的工具集对齐/错开）。
+    """
+    _write_log(tmp_path, conv_id, "root", [
+        {"type": "header", "format_version": 1, "conv_id": conv_id, "pid": "root",
+         "parent": None, "manifest_sha1": "m1", "created_at": 1.0,
+         "seq": 0, "lsn": 0, "ts": 1.0},
+        {"type": "user", "seq": 1, "lsn": 1, "ts": 1.0,
+         "message": {"role": "user", "content": "查一下"}},
+        {"type": "assistant", "seq": 2, "lsn": 2, "ts": 1.0,
+         "message": {"role": "assistant", "content": "",
+                     "tool_calls": [{"id": "call_1", "type": "function",
+                                     "function": {"name": "search",
+                                                  "arguments": "{}"}}]}},
+        {"type": "tool_call", "seq": 3, "lsn": 3, "ts": 1.0,
+         "record": {"tool_call_id": "call_1", "tool_name": "search",
+                    "arguments": {}, "result": "结果",
+                    "started_at": 1.0, "finished_at": 1.0, "error": None}},
+        {"type": "tool_result", "seq": 4, "lsn": 4, "ts": 1.0,
+         "message": {"role": "tool", "content": "结果",
+                     "tool_call_id": "call_1"}},
+        {"type": "assistant", "seq": 5, "lsn": 5, "ts": 1.0,
+         "message": {"role": "assistant", "content": "答案"}},
+        {"type": "stop", "seq": 6, "lsn": 6, "ts": 1.0, "stop_reason": "end_turn"},
+        {"type": "session_end", "seq": 7, "lsn": 7, "ts": 1.0,
+         "final_output": "答案", "execution_time": 1.0, "status": "paused"},
+    ])
+    (tmp_path / conv_id / "index.json").write_text(json.dumps({
+        "conv_id": conv_id, "created_at": 1.0, "owner": None,
+        "status": "paused", "manifest_sha1": "m1",
+        "manifest": {"SystemToolProvider": {"id": "x",
+                                            "tool_names": list(tool_names)},
+                     "llm": {"model": None}},
+        "script": None,
+        "agents": {"root": {"parent": None, "last_seq": 7, "last_lsn": 7,
+                            "status": "paused", "final_output": "答案",
+                            "execution_time": 1.0}},
+    }), encoding="utf-8")
+
+
 class TestFreshBoot:
     @run_async
     async def test_boot_fresh_delegates_to_spawn(self, tmp_path):
@@ -126,13 +190,11 @@ class TestResumeBoot:
         assert assembler.seen_histories[0][:2] == ["旧消息", "旧回复"]
 
     @run_async
+    @pytest.mark.skipif(sys.platform == "win32", reason="pid_alive POSIX-only")
     async def test_owner_conflict_refused_and_forced(self, tmp_path):
         _ended_conv(tmp_path)
         idx_path = tmp_path / "conv-1" / "index.json"
         idx = json.loads(idx_path.read_text(encoding="utf-8"))
-        idx["owner"] = "pid-999999-1"          # 死进程持有
-        idx["status"] = "active"
-        idx_path.write_text(json.dumps(idx), encoding="utf-8")
 
         import os
         # 活进程持有 → 拒绝
@@ -150,6 +212,32 @@ class TestResumeBoot:
             harness=_harness_with(ExitImmediatelyAdapter()),
             call_llm=_async_llm)
         assert report.mode == "resume"
+        await kernel._tasks["root"]
+        await store.close()
+
+    @run_async
+    @pytest.mark.skipif(sys.platform == "win32", reason="pid_alive POSIX-only")
+    async def test_dead_owner_takeover_succeeds(self, tmp_path):
+        """owner 为死进程 → 无 force 直接接管；index owner 换成本进程 token。"""
+        import os
+        _ended_conv(tmp_path)
+        idx_path = tmp_path / "conv-1" / "index.json"
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+        idx["owner"] = "pid-999999-1"          # 死进程持有
+        idx["status"] = "active"
+        idx_path.write_text(json.dumps(idx), encoding="utf-8")
+
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        report = await kernel.boot(
+            conv_id="conv-1",
+            harness=_harness_with(ExitImmediatelyAdapter()),
+            call_llm=_async_llm)
+        assert report.mode == "resume"
+
+        owner = json.loads(idx_path.read_text(encoding="utf-8"))["owner"]
+        assert isinstance(owner, dict)                       # begin_session 形状
+        assert f"pid-{os.getpid()}-" in owner["token"]       # 已换成本进程
         await kernel._tasks["root"]
         await store.close()
 
@@ -179,5 +267,140 @@ class TestResumeBoot:
         assert all(l.startswith("{") and l.endswith("}")
                    for l in text.splitlines())       # 半行已物理截断
         assert json.loads(text.splitlines()[-1])["type"] == "session_end"
+        await kernel._tasks["root"]
+        await store.close()
+        # 续跑结束后全量重解析：每行合法 JSON 且 seq 连续（截断未留隐患）
+        evts = [json.loads(l) for l in
+                p.read_text(encoding="utf-8").splitlines()]
+        assert [e["seq"] for e in evts] == list(range(len(evts)))
+
+
+class TestBootGuards:
+    """boot 入口守卫：store 缺失 / Mode 组合模糊 / 接管前廉价校验。"""
+
+    @run_async
+    async def test_resume_without_store_is_boot_error(self, tmp_path):
+        """I1：store 缺失时 conv_id 不得被静默丢弃为 fresh。"""
+        kernel = Kernel(MockConsole())           # 无 store
+        with pytest.raises(BootError, match="持久化未启用"):
+            await kernel.boot(conv_id="conv-1",
+                              harness=_harness_with(ExitImmediatelyAdapter()),
+                              call_llm=_async_llm)
+
+    @run_async
+    async def test_script_conv_without_script_path_is_boot_error(self, tmp_path):
+        """I2：会话由脚本创建但未提供 script_path → 接管前 BootError。"""
+        _ended_conv(tmp_path)
+        idx_path = tmp_path / "conv-1" / "index.json"
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+        idx["script"] = {"path": "/old/wf.py", "sha1": "abc"}
+        idx_path.write_text(json.dumps(idx), encoding="utf-8")
+
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        with pytest.raises(BootError, match="script_path"):
+            await kernel.boot(conv_id="conv-1",
+                              harness=_harness_with(ExitImmediatelyAdapter()),
+                              call_llm=_async_llm)
+        # 未接管：index owner 仍是 None
+        assert json.loads(idx_path.read_text(encoding="utf-8"))["owner"] is None
+
+    @run_async
+    async def test_script_path_without_script_meta_warns_mode_a(self, tmp_path):
+        """I2：提供了 script_path 但会话无脚本记录 → 告警 + 按 Mode A 恢复。"""
+        _ended_conv(tmp_path)
+        script = tmp_path / "wf.py"
+        script.write_text("# 内容无所谓\n", encoding="utf-8")
+
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        report = await kernel.boot(
+            conv_id="conv-1", script_path=str(script),
+            harness=_harness_with(ExitImmediatelyAdapter()),
+            call_llm=_async_llm)
+        assert report.mode == "resume"
+        assert "root" in report.replayed
+        assert any("无脚本记录" in w for w in report.warnings)
+        await kernel._tasks["root"]
+        await store.close()
+
+    @run_async
+    async def test_mode_a_without_harness_is_boot_error(self, tmp_path):
+        """I3：Mode A 缺 harness → 接管前 BootError（不留活主残留）。"""
+        _ended_conv(tmp_path)
+        idx_path = tmp_path / "conv-1" / "index.json"
+
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        with pytest.raises(BootError, match="harness"):
+            await kernel.boot(conv_id="conv-1", harness=None,
+                              call_llm=_async_llm)
+        # 未接管：index 保持 paused / owner None
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+        assert idx["owner"] is None and idx["status"] == "paused"
+
+
+class TestManifestGate:
+    """C1：manifest 分级校验在创建之后执行——探针能看到完整工具集。"""
+
+    @run_async
+    async def test_used_tool_present_succeeds_without_warnings(self, tmp_path):
+        expected = sorted(_runtime_tool_names() | {"search"})
+        _tool_conv(tmp_path, tool_names=expected)
+        harness = _harness_with(ExitImmediatelyAdapter())
+        harness.container.register(SystemToolProvider, _SearchProvider())
+
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        report = await kernel.boot(conv_id="conv-tools", harness=harness,
+                                   call_llm=_async_llm)
+        assert report.mode == "resume"
+        assert report.replayed == ["root"]
+        assert report.warnings == []             # 无硬失败、无假软告警
+        await kernel._tasks["root"]
+        await store.close()
+
+    @run_async
+    async def test_missing_used_tool_hard_fails_and_force_degrades(self, tmp_path):
+        expected = sorted(_runtime_tool_names() | {"search"})
+        _tool_conv(tmp_path, tool_names=expected)
+        # 容器不提供 search（composite 只带 runtime 工具）→ 硬失败
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        with pytest.raises(BootError, match="search"):
+            await kernel.boot(
+                conv_id="conv-tools",
+                harness=_harness_with(ExitImmediatelyAdapter()),
+                call_llm=_async_llm)
+
+        # force 降级为告警（同 store 二次接管：create_log 允许替换未 begun 的 log）
+        kernel2 = Kernel(MockConsole(), store=store)
+        report = await kernel2.boot(
+            conv_id="conv-tools", force=True,
+            harness=_harness_with(ExitImmediatelyAdapter()),
+            call_llm=_async_llm)
+        assert report.mode == "resume"
+        assert any("[force 降级]" in w and "search" in w
+                   for w in report.warnings)
+        await kernel2._tasks["root"]
+        await store.close()
+
+    @run_async
+    async def test_probe_unavailable_skips_check_with_warning(
+            self, tmp_path, monkeypatch):
+        """探针计算失败（{}）→ 跳过分级校验 + warning，绝不硬阻断。"""
+        expected = sorted(_runtime_tool_names() | {"search"})
+        _tool_conv(tmp_path, tool_names=expected)
+        monkeypatch.setattr(
+            Kernel, "_probe_manifest", lambda self, harness, runtime: {})
+
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        report = await kernel.boot(
+            conv_id="conv-tools",
+            harness=_harness_with(ExitImmediatelyAdapter()),
+            call_llm=_async_llm)
+        assert report.mode == "resume"
+        assert any("探针不可用" in w for w in report.warnings)
         await kernel._tasks["root"]
         await store.close()

@@ -223,11 +223,20 @@ class Kernel:
 
         Returns:
             BootReport（conv_id/mode/status_before/replayed/warnings 等）。
+
+        Raises:
+            BootError: resume 但 store 缺失（持久化未启用）、会话不存在、
+                Mode 组合模糊、廉价校验失败或 manifest 硬校验失败等。
+                接管语义：begin_session 之后发生的失败（如 manifest 硬校验）
+                会在 index 留下 active + 本进程 owner 的残留——本进程退出后
+                该 owner 成为死主，后续 boot 自动放行；同进程重试需 force。
+            SessionOwnerConflict: 会话被另一个存活进程持有（未 force）。
         """
         from ..core.session.boot import BootReport
+        from ..core.session.exceptions import BootError
 
-        if self._store is None or conv_id is None:
-            # fresh 路径：与现状完全一致
+        if conv_id is None:
+            # fresh 路径：与现状完全一致（store 可缺失）
             if self._store is not None:
                 self._store.begin_session(None)
             if script_path is not None:
@@ -237,6 +246,10 @@ class Kernel:
             return BootReport(
                 conv_id=self._store.conv_id if self._store else "",
                 mode="fresh")
+
+        if self._store is None:
+            raise BootError(
+                f"会话持久化未启用（store 缺失），无法 resume '{conv_id}'")
 
         return await self._boot_resume(
             conv_id, force=force, harness=harness,
@@ -272,7 +285,9 @@ class Kernel:
             token = None
         if token and not force:
             owner_pid = pid_from_token(token)
-            if owner_pid is not None:
+            if owner_pid is None:
+                report.warnings.append("owner token 不可解析，跳过活性检查")
+            else:
                 try:
                     owner_alive = pid_alive(owner_pid)
                 except NotImplementedError:
@@ -299,24 +314,31 @@ class Kernel:
                 report.warnings.append(
                     f"agent '{pid}' 日志尾部截断 {r.truncated_bytes} 字节（半行）")
 
-        # ── manifest 分级校验 ──
-        probe = self._probe_manifest(harness, None) if harness else {}
-        diff = diff_manifest(index.get("manifest"), probe,
-                             used_tool_names=used_tool_names(replays))
-        report.warnings.extend(diff.soft)
-        if diff.hard and not force:
-            raise BootError("manifest 硬校验失败：\n  " + "\n  ".join(diff.hard)
-                            + "\n如确认继续，使用 --force。")
-        if diff.hard:
-            report.warnings.extend(f"[force 降级] {h}" for h in diff.hard)
-
         # ── Mode 判定：有 script 记录 → Mode B；否则 Mode A ──
         script_meta = index.get("script")
-        mode_b = script_meta is not None and script_path is not None
+        if script_meta is not None and script_path is None:
+            raise BootError(
+                f"会话 '{conv_id}' 由脚本创建，恢复需提供 script_path")
+        mode_b = script_meta is not None
+        if script_path is not None and script_meta is None:
+            report.warnings.append(
+                "提供了 script_path 但该会话无脚本记录，按 Mode A 恢复")
+
+        # ── 接管前廉价校验：begin_session 一旦接管（index 写 active +
+        # 本进程 owner），后续失败留下的活主占用会让同进程重试撞自己的
+        # SessionOwnerConflict——能在接管前拦的全部拦掉 ──
         if mode_b:
+            import os
+            if (not os.path.isfile(script_path)
+                    or not os.access(script_path, os.R_OK)):
+                raise BootError(f"脚本文件不存在或不可读: {script_path}")
             self._verify_script_sha1(script_meta, script_path, force, report)
-        elif replays.get("root") is None:
-            raise BootError(f"会话 '{conv_id}' 缺少 root 日志，无法恢复")
+        else:
+            if replays.get("root") is None:
+                raise BootError(f"会话 '{conv_id}' 缺少 root 日志，无法恢复")
+            if harness is None:
+                raise BootError(
+                    f"Mode A 恢复会话 '{conv_id}' 需要 harness 实例")
 
         # ── 接管会话（index owner 更新 + sequencer 恢复）──
         # 必须先于任何 create_log：Sequencer 按引用捕获，restore 会替换对象
@@ -324,13 +346,36 @@ class Kernel:
         store.restore_sequencer(max(r.max_lsn for r in replays.values()) + 1)
 
         # ── 第 1 步：创建所有（不启动、不投 entry、不重发控制台事件）──
+        before = set(self.runtime_table.keys())
         if mode_b:
-            self._create_agents_from_script(script_path, parent=None)
+            created = self._create_agents_from_script(script_path, parent=None)
+            main_pid = created["created_pids"][0]   # step 3 校验保证非空
         else:
             self._create_root(harness, call_llm)
+            main_pid = "root"
+        # 只重启本次创建的 agent——复用 kernel 时无关 FINISHED agent 不受影响
+        restarted = set(self.runtime_table.keys()) - before
 
-        # ── 第 2 步：种子（append 前物理截断半行；只 seed 将重启的 agent）──
-        restarted = set(self.runtime_table.keys())
+        # ── manifest 分级校验（创建之后、种子之前：_inject_runtime_tools 的
+        # composite 已注入容器，探针经 build_tool_router 现算完整工具集）──
+        probe: dict = {}
+        main_runtime = self.runtime_table.get(main_pid)
+        probe_harness = getattr(main_runtime, "_harness", None) or harness
+        if probe_harness is not None:
+            probe = self._probe_manifest(probe_harness, main_runtime)
+        if not probe:
+            # 探针失败永远不得变成硬阻断（失败方向向下）
+            report.warnings.append("manifest 探针不可用，跳过分级校验")
+        else:
+            diff = diff_manifest(index.get("manifest"), probe,
+                                 used_tool_names=used_tool_names(replays))
+            report.warnings.extend(diff.soft)
+            if diff.hard and not force:
+                raise BootError(
+                    "manifest 硬校验失败：\n  " + "\n  ".join(diff.hard)
+                    + "\n如确认继续，使用 --force。")
+            if diff.hard:
+                report.warnings.extend(f"[force 降级] {h}" for h in diff.hard)
         for pid in sorted(restarted):
             r = replays.get(pid)
             if r is None:
@@ -784,13 +829,22 @@ class Kernel:
         )
 
     def _probe_manifest(self, harness, runtime) -> dict:
-        """计算当前装配清单（T9 接入 compute_manifest；就绪前一律返回 {}）。"""
+        """计算当前装配清单（T9 接入 compute_manifest；失败一律返回 {}）。
+
+        工具集优先取 runtime 的 ``_cached_tools``（phase_init 缓存）；
+        boot 探针时 phase_init 尚未运行（缓存为空），改经 build_tool_router
+        现算——此时 _inject_runtime_tools 的 composite 已注入容器，
+        router 级并集 = 用户工具 ∪ runtime 工具 ∪ MCP 工具。
+        """
         try:
             from ..core.session.manifest import compute_manifest
+            from ..core.async_orchestrator import build_tool_router
             tools = []
             orch = getattr(runtime, "_orchestrator", None)
-            if orch is not None:
+            if orch is not None and orch._cached_tools:
                 tools = orch._cached_tools
+            else:
+                tools = build_tool_router(harness.container)[1]
             return compute_manifest(
                 harness.container, cached_tools=tools,
                 call_llm=getattr(harness, "call_llm", None),

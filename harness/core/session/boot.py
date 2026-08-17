@@ -24,7 +24,11 @@ class BootReport:
 
 @dataclass
 class ResumePlan:
-    """单个 agent 的恢复计划。"""
+    """单个 agent 的恢复计划。
+
+    预留结构：T10 尚未消费（boot 直接内联处理），T12 配对修复可能
+    据此组装逐 agent 的重启/标记/截断计划；当前无使用方。
+    """
     pid: str
     restart: bool                   # Mode A: 仅 root；Mode B: 全体
     needs_marker: bool              # interrupted → 注入 resume_marker
