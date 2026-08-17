@@ -2008,6 +2008,8 @@ git commit -m "feat(session): add SessionLog — in-memory truth with mirrored r
 
 - [ ] **Step 1: 写失败测试**
 
+> **【执行期修订】** 原测试块中 test 1/3/6 在 `_phase_loop` 后读 `log._pending`，与 3i 的轮次边界 flush（swap 清空 _pending，由 test_flush_at_round_boundary_persists 钉死）矛盾。已将这三处的观察点改为读已落盘文件（`_read_events` helper），断言内容不变。
+
 `tests/session/test_orchestrator_recording.py`：
 
 ```python
@@ -2073,6 +2075,13 @@ def _make(tmp_path, inputs, llm, with_provider=False):
     return store, log, orch
 
 
+def _read_events(store, pid):
+    """读已 flush 的事件（轮次边界 flush 后 _pending 已清空，事件在盘上）。"""
+    path = store.agent_log_path(pid)
+    return [json.loads(l) for l in
+            path.read_text(encoding="utf-8").splitlines()]
+
+
 class TestRecording:
     @run_async
     async def test_text_round_records_r0_r1_r4(self, tmp_path):
@@ -2083,7 +2092,7 @@ class TestRecording:
         ctx = await orch._phase_init()
         await orch._phase_loop(ctx)
 
-        evts = [json.loads(l) for l in log._pending]
+        evts = _read_events(store, "root")  # flush 后事件在盘上，不在 _pending
         assert [e["type"] for e in evts] == ["header", "user", "assistant", "stop"]
         assert evts[1]["message"]["content"] == "你好"
         assert evts[2]["message"]["content"] == "你好！"
@@ -2113,10 +2122,10 @@ class TestRecording:
         ctx = await orch._phase_init()
         await orch._phase_loop(ctx)
 
-        types = [json.loads(l)["type"] for l in log._pending]
+        types = [e["type"] for e in _read_events(store, "root")]
         assert types == ["header", "user", "assistant",
                          "tool_call", "tool_result", "assistant", "stop"]
-        rec = json.loads(log._pending[3])["record"]
+        rec = _read_events(store, "root")[3]["record"]
         assert rec["tool_name"] == "echo" and rec["error"] is None
         assert len(log.tool_call_records) == 1       # R3a 镜像 records
         await store.close()
@@ -2161,7 +2170,7 @@ class TestRecording:
                                  _llm_scripted([Response(text="在")]))
         ctx = await orch._phase_init()
         await orch._phase_loop(ctx)
-        user_evt = json.loads(log._pending[1])
+        user_evt = _read_events(store, "root")[1]
         assert user_evt["meta"] == {"from": "b", "type": "talk_to", "msg_id": "M-9"}
         await store.close()
 
