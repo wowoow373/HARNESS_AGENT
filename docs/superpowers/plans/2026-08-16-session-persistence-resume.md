@@ -4729,3 +4729,10 @@ git commit -m "docs(session): document persistence & resume architecture and con
 ## 执行方式建议
 
 任务粒度与依赖已按"子代理逐任务执行 + 任务间两阶段审查"设计：每个任务自带完整失败测试与实现，关键路径上的任务（T5/T6/T8/T10）完成后应运行全量回归再放行下一任务。
+
+## 最终整体审查（T15 后）
+
+结论：7 条核心不变量（单写协程 per 文件 / seq 连续 / LSN 会话级单调 / 失败方向向下 / 所有权接管 / boot 四步序 / msg_id 配对修复）全部 ✅。
+
+- **Important（已修，f236647）**：Mode B 会话 index.json 丢失/损坏后不可恢复——`rebuild_index` 写 `script=None`，`_boot_resume` 的 `mode_b` 判定失效，即便用户显式传 `script_path` 也落入 Mode A 而 `BootError("缺少 root 日志")`。修法：`script_meta` 为 None 但 `script_path` 在手且 `replays` 无 root → 推断 Mode B（sha1 无从比对则告警放行）；`_verify_script_sha1` 容忍 `script_meta=None`。补测试 `test_rebuild_index_recovers_mode_b_with_script`。
+- **deferred Minors（记录，未修）**：`rebuild_index` 投影缺 `manifest`（Mode A 索引损坏重建后 manifest 分级校验被静默跳过）与缺 `final_output`/`execution_time`（`ReplayResult.final_output` 已可用可零成本补）；index 的 `execution_time` 与盘上 `session_end.execution_time` 时钟源不同（started_at vs _start_time）；`_finalize_fallback`/`_read_ondisk_last_seq` 在 degraded 兜底路径做同步 I/O；嵌套 spawn 的 `spawn_entry` 边只作取证不参与重投（嵌套 agent 从不进 restarted）；`_build_trajectory` 与 `_extract_last_output`/sync `orchestrator.py` 三处重复「最后 assistant 文本」。
