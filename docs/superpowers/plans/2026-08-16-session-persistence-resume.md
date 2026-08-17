@@ -3082,6 +3082,13 @@ git commit -m "feat(session): add replay loader with corruption checks and inter
 - Modify: `harness/core/async_orchestrator.py`（提取 `build_tool_router`，供 boot 探针复用）
 - Test: `tests/session/test_manifest.py`
 
+> **【执行期修订】**（T9 质量评审结论，已回写实现 c4dbc60）
+> 1. `diff_manifest` 的 current_tools/old_tools 不再只读 `SystemToolProvider.tool_names`，改用 `_tool_names()` 并集（SystemToolProvider/MCPAdapter 两键，isinstance 容错）——MCP-only 装配或 SystemToolProvider 被摘除的部署形态下，原实现会把"历史用过的 MCP 工具"误报为硬失败（虚假 BootError 会训练用户习惯性 --force）。两 provider 都在时并集与原行为逐字节等价。
+> 2. `compute_manifest` 的 resolve 失败分级：`ComponentNotRegisteredError` 静默跳过（预期）；其他异常 `logger.warning` 后跳过（原 `except Exception: continue` 全静默 = 错而稳定的 sha 基线，零观测）。
+> 3. manifest 四键统一 `copy.deepcopy(fp)`——消除 fingerprint 内部 dict 的别名泄漏（事后原地 mutation 会改变 sha；write_index 按引用重序列化会使 index.json 与 header sha 脱节）。
+> 4. `diff_manifest` 的 ContextAssembler/llm `.get` 链加 isinstance dict 守卫——腐败存量 manifest（手工编辑/跨版本）从"未捕获 AttributeError 崩溃"降为"按缺席处理"。
+> 5. 测试钉死：MCP-only 不误报、`old=None` 首启语义、硬失败抑制软告警、llm model soft、fingerprint 抛异常/非 dict 回落、非 dict 条目容错、fingerprint 别名隔离。
+
 - [ ] **Step 1: 写失败测试**
 
 `tests/session/test_manifest.py`：
