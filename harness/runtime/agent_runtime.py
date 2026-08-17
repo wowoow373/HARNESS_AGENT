@@ -116,17 +116,21 @@ class AgentRuntime:
     # orchestrator 初始化
     # ------------------------------------------------------------------
 
-    def _init_orchestrator(self, call_llm: Optional[AsyncCallLLM] = None):
+    def _init_orchestrator(self, call_llm: Optional[AsyncCallLLM] = None,
+                           session_log=None):
         """在 Kernel 设置好 adapter 后调用，完成 orchestrator 装配。
 
         Args:
             call_llm: async LLM callable。已在 Runtime 入口层做过
                       sync→async 桥接。
+            session_log: SessionLog（可选）。传入后 orchestrator 的
+                         _history/_tool_call_records 与之共享同一对象。
         """
         self._orchestrator = AsyncLifecycleOrchestrator(
             container=self._harness.container,
             adapter=self.adapter,
             call_llm=call_llm,
+            session_log=session_log,
         )
 
     # ------------------------------------------------------------------

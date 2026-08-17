@@ -72,6 +72,18 @@ from ..messaging import (
 logger = logging.getLogger(__name__)
 
 
+def _request_meta(request: UserRequest) -> dict:
+    """提取持久化所需的交互元数据（from/msg_id/type/workflow_flag）。
+
+    只白名单提取——metadata 是用户扩展桶，不全量落盘。
+    """
+    return {
+        k: request.metadata[k]
+        for k in ("from", "msg_id", "type", "workflow_flag")
+        if k in request.metadata
+    }
+
+
 # ---------------------------------------------------------------------------
 # AsyncLifecycleOrchestrator
 # ---------------------------------------------------------------------------
@@ -113,6 +125,8 @@ class AsyncLifecycleOrchestrator:
         # - Hook 开发（在 call_llm 前拦截并注入自定义行为）
         # 与同步版 LifecycleOrchestrator 的 Optional 约定一致
         call_llm: Optional[AsyncCallLLM] = None,
+        # session_log 为 None 时行为与插桩前完全一致（无持久化路径）
+        session_log=None,
     ):
         """初始化异步编排器。
 
@@ -144,6 +158,14 @@ class AsyncLifecycleOrchestrator:
         self._cached_guides: Optional[GuidesBundle] = None
         self._cached_tools: List[ToolDefinition] = []
         self._cached_tool_router: Optional[ToolRouter] = None
+
+        # SessionLog —— _history/_tool_call_records 的唯一变异点。
+        # 同一对象引用两视图：orchestrator 的字段直接重绑定为 SessionLog 的列表，
+        # 读取方（AgentRuntime._extract_last_output、assemble、sensor）零改动。
+        self._session_log = session_log
+        if session_log is not None:
+            self._history = session_log.history
+            self._tool_call_records = session_log.tool_call_records
 
     # ------------------------------------------------------------------
     # Hook 注册
@@ -297,12 +319,12 @@ class AsyncLifecycleOrchestrator:
         assembler = self._resolve_optional(ContextAssembler)
         tool_router = self._cached_tool_router
 
-        # ── 当前轮用户请求写入 history ──
+        # ── 当前轮用户请求写入 history（R1: record_message + meta）──
         if ctx.user_request and ctx.user_request.text:
-            self._history.append(Message(
-                role="user",
-                content=ctx.user_request.text,
-            ))
+            self._record_message(
+                Message(role="user", content=ctx.user_request.text),
+                meta=_request_meta(ctx.user_request),
+            )
 
         # ── 组装上下文 ──
         ctx = self._hook_manager.trigger(
@@ -330,11 +352,13 @@ class AsyncLifecycleOrchestrator:
                     "Breaking inner loop to prevent infinite tool-calling."
                 )
                 await self._adapter.send(StopEvent(stop_reason="max_iterations"))
+                self._record_stop("max_iterations")
                 break
 
             if not self.call_llm:
                 logger.warning("call_llm not set, skipping LLM call")
                 await self._adapter.send(StopEvent(stop_reason="no_llm"))
+                self._record_stop("no_llm")
                 break
 
             # --- LLM 调用 ---
@@ -363,8 +387,8 @@ class AsyncLifecycleOrchestrator:
                 assistant_msg = build_assistant_message(response)
                 messages.append(assistant_msg)
 
-                # 将 assistant tool_use 消息写入 history
-                self._history.append(Message(
+                # 将 assistant tool_use 消息写入 history（R2，Hook 后终值）
+                self._record_message(Message(
                     role="assistant",
                     content=response.text or "",
                     tool_calls=list(response.tool_uses),
@@ -451,8 +475,8 @@ class AsyncLifecycleOrchestrator:
                     content = tool_result.content
                     error = tool_result.error
 
-                    # 记录到 tool_call_records
-                    self._tool_call_records.append(ToolCallRecord(
+                    # 记录到 tool_call_records（R3a，Hook 后终值）
+                    self._record_tool_call(ToolCallRecord(
                         tool_call_id=tc.id,
                         tool_name=tc.function.name,
                         arguments=args,
@@ -466,8 +490,8 @@ class AsyncLifecycleOrchestrator:
                     tool_msg = build_tool_result_message(tc, content, error)
                     messages.append(tool_msg)
 
-                    # 将 tool 执行结果写入 history
-                    self._history.append(Message(
+                    # 将 tool 执行结果写入 history（R3b）
+                    self._record_message(Message(
                         role="tool",
                         content=str(content) if not error else f"Error: {error}",
                         tool_call_id=tc.id,
@@ -485,9 +509,11 @@ class AsyncLifecycleOrchestrator:
                 )
                 await self._adapter.send(TextEvent(content=response.text or ""))
                 await self._adapter.send(StopEvent(stop_reason=response.stop_reason))
-                self._history.append(
+                # R4a/R4b：assistant 终值 + 轮次停止原因
+                self._record_message(
                     Message(role="assistant", content=response.text or "")
                 )
+                self._record_stop(response.stop_reason)
                 break  # 跳出内层循环
 
             # --- ④ 防御：空响应 ---
@@ -495,7 +521,12 @@ class AsyncLifecycleOrchestrator:
                 "LLM returned empty response (no text, no tool_uses)"
             )
             await self._adapter.send(StopEvent(stop_reason="empty_response"))
+            self._record_stop("empty_response")
             break
+
+        # ── 轮次边界：批量 flush（返回即达 page cache；进程崩溃不丢本轮）──
+        if self._session_log is not None:
+            await self._session_log.flush()
 
         logger.info("Phase 2: Single round ended")
 
@@ -541,6 +572,19 @@ class AsyncLifecycleOrchestrator:
             except Exception as e:
                 logger.warning(f"ToolRouter.shutdown() failed: {e}")
 
+        # R6: finalize —— session_end 事件 + fsync。
+        # 必须在 history 清理之前（final_output 来自 trajectory，事件此刻编码）；
+        # 失败只降级（finalize 内部兜底），不阻断 _phase_end 其余清理。
+        if self._session_log is not None:
+            try:
+                await self._session_log.finalize(
+                    status="paused",
+                    final_output=trajectory.final_output,
+                    execution_time=trajectory.execution_time,
+                )
+            except Exception as e:
+                logger.warning(f"SessionLog.finalize() failed: {e}")
+
         # 5. 清理内部状态
         self._history.clear()
         self._tool_call_records.clear()
@@ -551,6 +595,26 @@ class AsyncLifecycleOrchestrator:
     # ------------------------------------------------------------------
     # 辅助方法
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # SessionLog 记录点（无 session_log 时退化为原样的内存 append）
+    # ------------------------------------------------------------------
+
+    def _record_message(self, message: Message, *, meta: Optional[dict] = None) -> None:
+        if self._session_log is not None:
+            self._session_log.record_message(message, meta=meta)
+        else:
+            self._history.append(message)
+
+    def _record_tool_call(self, record: ToolCallRecord) -> None:
+        if self._session_log is not None:
+            self._session_log.record_tool_call(record)
+        else:
+            self._tool_call_records.append(record)
+
+    def _record_stop(self, reason: str) -> None:
+        if self._session_log is not None:
+            self._session_log.record_stop(reason)
 
     def _resolve_optional(self, interface: type) -> Optional[Any]:
         """尝试解析组件，不存在时返回 None 并记录 WARNING。
