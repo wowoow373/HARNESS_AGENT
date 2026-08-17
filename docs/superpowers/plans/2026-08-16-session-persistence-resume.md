@@ -3871,6 +3871,14 @@ git add harness/core/session/boot.py harness/core/session/store.py harness/runti
 git commit -m "feat(session): add Kernel.boot with create/start split, ownership takeover, and resume seeding"
 ```
 
+**T10 【执行期修订】（质量审查 C1/I1–I4 + M1–M6，commit e42dc0e）：**
+
+1. **manifest 分级校验后移**：计划草稿在创建前用 `_probe_manifest(harness, None)` 探针——`runtime=None` 时 `_cached_tools=[]`，compute_manifest 把空 tool_names 写进两 provider 键 → "历史用过的工具当前不可用"必硬失败，任何用过工具的会话 resume 全灭（Mode B 尤甚）。修订为：校验移到「创建所有之后、种子之前」；`_probe_manifest` 在 `_cached_tools` 为空时回退 `build_tool_router(harness.container)[1]` 现算（此时 `_inject_runtime_tools` 的 composite 已注入容器，router 级并集 = 用户工具 ∪ runtime 工具 ∪ MCP 工具）；探针失败降级为 warning 跳过，永不硬阻断。新增 TestManifestGate 三测钉死。
+2. **入口守卫（接管前廉价校验）**：`boot(conv_id)` 但 store 缺失 → BootError（不再静默丢 conv_id 走 fresh）；会话由脚本创建但未给 script_path → BootError；Mode A 缺 harness → BootError。均发生在 `begin_session`（写 active+本进程 owner）之前，避免失败留下活主残留让同进程重试撞自己的 SessionOwnerConflict。docstring 记录接管后失败的死主恢复语义。
+3. **owner 冲突无同进程豁免**：活 pid 即拒（force 除外）——同进程重复 boot 同样是冲突；死主（pid 不可活）无 force 放行；token 不可解析 → warning 跳过探活。死主接管 happy path 拆独立测试（原测试里三行死代码删除）。
+4. **restarted = 创建前后差集**：`before = set(runtime_table)` 快照，创建后取差，防止复用 kernel 时把无关 FINISHED agent 重新 run()。
+5. **Minors**：owner 冲突测试加 win32 skipif（pid_alive POSIX-only）；截断测试补"续跑后 seq 连续"全量重解析断言；ResumePlan 标注为预留结构（T12 可能消费）。
+
 ---
 
 ### Task 11: msg_id 盖章 —— TalkToTool / MessageBus / KBA / child_finished / spawn_entry
