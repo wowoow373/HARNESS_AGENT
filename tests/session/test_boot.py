@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import sys
 
 import pytest
@@ -324,6 +325,37 @@ class TestBootGuards:
         assert any("无脚本记录" in w for w in report.warnings)
         await kernel._tasks["root"]
         await store.close()
+
+    @run_async
+    async def test_rebuild_index_recovers_mode_b_with_script(self, tmp_path):
+        """I1：index 丢失/重建后无 script 记录，但日志无 root 且脚本在手
+        → 推断 Mode B 恢复（而非 BootError 缺少 root 日志）。"""
+        from tests.runtime.test_e2e_workflow import _write_workflow_script
+
+        conv_id = "conv-wf"
+        # 无 root 日志、多 agent（w1）的 Mode B 会话；不写 index.json（模拟丢失）
+        _write_log(tmp_path, conv_id, "w1", [
+            {"type": "header", "format_version": 1, "conv_id": conv_id,
+             "pid": "w1", "parent": "root", "manifest_sha1": "m0",
+             "created_at": 1.0, "seq": 0, "lsn": 0, "ts": 1.0},
+            {"type": "user", "seq": 1, "lsn": 1, "ts": 1.0,
+             "message": {"role": "user", "content": "去干活"}},
+        ])
+
+        script = _write_workflow_script([{"name": "w1",
+                                          "entry_prompt": "去干活"}])
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        try:
+            report = await kernel.boot(conv_id=conv_id, script_path=script,
+                                       harness=None)
+            assert report.mode == "resume"
+            assert "w1" in report.replayed
+            assert any("按提供的脚本恢复" in w for w in report.warnings)
+        finally:
+            await asyncio.gather(*kernel._tasks.values())
+            await store.close()
+            os.unlink(script)
 
     @run_async
     async def test_mode_a_without_harness_is_boot_error(self, tmp_path):

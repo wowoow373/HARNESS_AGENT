@@ -337,8 +337,15 @@ class Kernel:
                 f"会话 '{conv_id}' 由脚本创建，恢复需提供 script_path")
         mode_b = script_meta is not None
         if script_path is not None and script_meta is None:
-            report.warnings.append(
-                "提供了 script_path 但该会话无脚本记录，按 Mode A 恢复")
+            if replays.get("root") is None:
+                # 索引丢失/重建后无 script 记录，但日志无 root（= 脚本多 agent
+                # 会话）且脚本在手 → 推断 Mode B；sha1 无从比对，告警放行
+                mode_b = True
+                report.warnings.append(
+                    "索引丢失，无法比对脚本 sha1；按提供的脚本恢复（Mode B）")
+            else:
+                report.warnings.append(
+                    "提供了 script_path 但该会话无脚本记录，按 Mode A 恢复")
 
         # ── 接管前廉价校验：begin_session 一旦接管（index 写 active +
         # 本进程 owner），后续失败留下的活主占用会让同进程重试撞自己的
@@ -448,7 +455,7 @@ class Kernel:
 
         with open(script_path, "rb") as fh:
             actual = hashlib.sha1(fh.read()).hexdigest()
-        expect = script_meta.get("sha1")
+        expect = (script_meta or {}).get("sha1")
         if expect and actual != expect:
             msg = (f"脚本已修改：{script_path}\n  记录: {expect}\n"
                    f"  当前: {actual}")
