@@ -155,6 +155,7 @@ pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 920 tests
 - ✅ 系统命令：`/agents` `/kill` `/end` `/talk` `/exit`
 - ✅ Mode A（交互式）+ Mode B（Workflow 直接启动）
 - ✅ KBA DI 可注册：支持自定义 I/O 策略（batch window / immediate 等）
+- 会话持久化与崩溃恢复（`--resume`）——见 [ARCHITECTURE.md](ARCHITECTURE.md#会话持久化与恢复)
 
 **计划中**
 

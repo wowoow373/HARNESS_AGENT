@@ -665,3 +665,20 @@ interface CodeContextAssembler extends ContextAssembler:
 | **扩展方式** | 实现接口 + Hook | 插件/Hook | SDK 实现 |
 | **配置复杂度** | 低（TOML 仅标识） | 中（JSON/YAML 配置） | 高（完整规范） |
 | **目标用户** | 个人开发者、小型团队 | 专业开发者 | 企业/研究团队 |
+
+---
+
+## 十、会话持久化与恢复
+
+- 内核机制（非插件），默认开启；配置面仅 `sessions.root` / `sessions.enabled`
+- 存储：`sessions/<conv_id>/agents/<pid>.jsonl`（append-only 事实，唯一不可丢）
+  + `index.json`（原子重写的投影，可从 jsonl 重建）
+- 热路径零 I/O：内存即时、轮次边界批量 flush（page cache）、fsync 仅在
+  finalize/close；单写协程 per 文件
+- 三套序号：seq（文件内严格连续，缺号=损坏）/ msg_id（跨日志因果配对）/
+  LSN（会话级单调，空洞=崩溃损失证据）
+- 恢复：`--resume <conv_id>`（可加 --force）；boot 四步序
+  "创建所有 → 种子 → 配对修复 → 启动所有"；manifest 分级校验
+  （语义关键不一致硬失败，--force 降级）
+- 崩溃语义：尾部半行加载时截断；中断工具调用注入仅内存的恢复标记；
+  已发未收消息按 msg_id 配对补投
