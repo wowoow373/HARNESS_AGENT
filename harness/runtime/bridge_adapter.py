@@ -53,6 +53,8 @@ class KernelBridgeAdapter:
         self._pid = pid
         self._kernel = kernel
         self._runtime = runtime
+        # SessionLog 由 Kernel._make_session_log 接线（发送方事实的落盘点）。
+        self._session_log = None
 
     # ------------------------------------------------------------------
     # AsyncInputAdapter 实现
@@ -94,6 +96,8 @@ class KernelBridgeAdapter:
         2. 事件类型过滤：非 TextEvent/StopEvent → 降级到 SystemConsole
         3. 定向投递：target 非空 → MessageBus.direct()
         4. 广播：target=None → MessageBus.publish()
+
+        两条路径产出的 StampedEdge 经 _record_edges 落为发送方事实。
         """
         if self._runtime.should_exit:
             return  # 退出保护：丢弃"最后一轮污染"
@@ -118,7 +122,8 @@ class KernelBridgeAdapter:
                 content=event.content if isinstance(event, TextEvent) else "",
                 metadata={"stop": True} if isinstance(event, StopEvent) else {},
             )
-            self._kernel.message_bus.direct(target, msg)
+            edge = self._kernel.message_bus.direct(target, msg)
+            self._record_edges([edge] if edge else [])
             # TextEvent 也同步输出到终端
             if isinstance(event, TextEvent):
                 await self._kernel._console.send(
@@ -127,11 +132,25 @@ class KernelBridgeAdapter:
         else:
             # pub-sub 路由：TextEvent 在 MessageBus 内部始终输出到终端。
             # on_no_subscriber 仅作为 MessageBus console 为 None 时的兜底。
-            await self._kernel.message_bus.publish(
+            edges = await self._kernel.message_bus.publish(
                 from_pid=self._pid,
                 event=event,
                 on_no_subscriber=(
                     self._kernel._console.send
                     if isinstance(event, TextEvent) else None
                 ),
+            )
+            self._record_edges(edges)
+
+    def _record_edges(self, edges) -> None:
+        """将 MessageBus 返回的 StampedEdge 落为 SessionLog 的 edge 事件。
+
+        无 SessionLog（持久化关闭且未接线）或无边时直接返回——发送方事实
+        记录是尽力而为，永不因记录失败打断消息投递。
+        """
+        if not edges or self._session_log is None:
+            return
+        for e in edges:
+            self._session_log.record_edge(
+                msg_id=e.msg_id, to=e.to_pid, kind=e.kind, text=e.text,
             )

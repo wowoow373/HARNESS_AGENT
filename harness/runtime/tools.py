@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..components.tool.base import BaseTool
 from ..components.tool.default_system_tool_provider import DefaultSystemToolProvider
+from ..core.session.ids import new_msg_id
 from ..interfaces.types import ToolDefinition, ToolResult, UserRequest
 
 if TYPE_CHECKING:
@@ -248,16 +249,24 @@ class TalkToTool(BaseTool):
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         target_pid = args["pid"]
         text = args["text"]
+        msg_id = new_msg_id()
         self._kernel.send_input(
             target_pid,
             UserRequest(
                 text=text,
-                metadata={"from": self._from_pid, "type": "talk_to"},
+                metadata={
+                    "from": self._from_pid,
+                    "type": "talk_to",
+                    "msg_id": msg_id,
+                },
             ),
         )
         return ToolResult(
             success=True,
-            content=json.dumps({"ok": True, "target": target_pid}),
+            content=json.dumps(
+                {"ok": True, "target": target_pid, "msg_id": msg_id},
+                ensure_ascii=False,
+            ),
         )
 
 

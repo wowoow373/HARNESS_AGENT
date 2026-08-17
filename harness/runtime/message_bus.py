@@ -10,11 +10,24 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
+from ..core.session.ids import new_msg_id
 from ..interfaces.types import StopEvent, TextEvent
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StampedEdge:
+    """出站消息边（发送方事实）：内核在中介点盖章后产生的可配对记录。"""
+
+    msg_id: str
+    from_pid: str
+    to_pid: str
+    kind: str        # "publish" | "direct"
+    text: str
 
 
 class MessageBus:
@@ -77,7 +90,7 @@ class MessageBus:
         from_pid: str,
         event: Any,
         on_no_subscriber: Any = None,
-    ) -> None:
+    ) -> List[StampedEdge]:
         """向 from_pid 的所有订阅者广播 event。
 
         async 因为有降级路径需要 await on_no_subscriber。
@@ -91,6 +104,9 @@ class MessageBus:
         - event is StopEvent → 静默丢弃（不调用 on_no_subscriber）
 
         订阅者已 FINISHED（其 input_queue 已从 input_queues 中移除）→ 跳过
+
+        返回每个活跃订阅者一条 StampedEdge（发送方事实）。StopEvent
+        不盖章（控制事件），返回空列表。
         """
         from .types import AgentOutput, InternalMessage
 
@@ -116,27 +132,51 @@ class MessageBus:
 
         if not active_subscribers:
             # StopEvent + 无订阅者 → 静默丢弃
-            return
+            return []
 
-        # 构造内部消息
-        msg = InternalMessage(
-            from_pid=from_pid,
-            content=event.content if isinstance(event, TextEvent) else "",
-            metadata={"stop": True} if isinstance(event, StopEvent) else {},
+        # 文本提取：TextEvent 用 content；其余（测试替身/自定义事件）回退 text
+        text = (
+            event.content
+            if isinstance(event, TextEvent)
+            else getattr(event, "text", "")
         )
+        stampable = not isinstance(event, StopEvent)
 
-        # 广播到所有活跃订阅者
+        # 每个订阅者独立构造 InternalMessage + 独立 msg_id（发送方事实）。
+        edges: List[StampedEdge] = []
         for sub_pid in active_subscribers:
+            msg_id = new_msg_id()
+            msg = InternalMessage(
+                from_pid=from_pid,
+                content=event.content if isinstance(event, TextEvent) else "",
+                metadata=(
+                    {"stop": True}
+                    if isinstance(event, StopEvent)
+                    else ({"msg_id": msg_id} if stampable else {})
+                ),
+            )
             self._input_queues[sub_pid].put_nowait(msg)
             logger.debug(f"publish: '{from_pid}' → '{sub_pid}'")
+            if stampable:
+                edges.append(StampedEdge(
+                    msg_id=msg_id, from_pid=from_pid, to_pid=sub_pid,
+                    kind="publish", text=text,
+                ))
 
-    def direct(self, target_pid: str, message: Any) -> None:
+        return edges
+
+    def direct(self, target_pid: str, message: Any) -> Optional[StampedEdge]:
         """定向投递：跳过订阅表，直接投递到 target_pid 的队列。
 
         message 是由调用方（KernelBridgeAdapter）构造的 InternalMessage
         实例。direct() 直接入队，不做重新包装。
 
         纯 dict 查找 + asyncio.Queue.put_nowait，同步方法。
+
+        盖章规则：
+        - metadata 含 stop → 入队后返回 None（控制事件不盖章）
+        - metadata 已含 msg_id → 入队后返回 None（调用方已盖章，不重复记录）
+        - 否则盖 msg_id 并返回 StampedEdge（发送方事实）
 
         Raises:
             KeyError: target_pid 不在 input_queues 中
@@ -146,8 +186,31 @@ class MessageBus:
                 f"target_pid '{target_pid}' not found in input_queues"
             )
 
+        metadata = getattr(message, "metadata", None)
+        if metadata is None:
+            metadata = {}
+            try:
+                message.metadata = metadata
+            except AttributeError:
+                pass
+        if metadata.get("stop"):
+            self._input_queues[target_pid].put_nowait(message)
+            return None
+        if metadata.get("msg_id"):
+            self._input_queues[target_pid].put_nowait(message)
+            return None
+
+        msg_id = new_msg_id()
+        metadata["msg_id"] = msg_id
         self._input_queues[target_pid].put_nowait(message)
         logger.debug(f"direct: → '{target_pid}'")
+        return StampedEdge(
+            msg_id=msg_id,
+            from_pid=message.from_pid,
+            to_pid=target_pid,
+            kind="direct",
+            text=getattr(message, "content", ""),
+        )
 
     def get_subscribers_of(self, publisher_pid: str) -> list[str]:
         """返回订阅了 publisher_pid 的所有 pid 列表。

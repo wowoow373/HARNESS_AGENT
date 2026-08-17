@@ -16,6 +16,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from ..core.session.ids import new_msg_id
 from ..interfaces.types import UserRequest
 from .types import (
     AgentFinished,
@@ -591,13 +592,26 @@ class Kernel:
         # ── Step 9: Deliver entry_prompts ──
         if deliver_entry:
             for name, blueprint in decorators._agent_registry.items():
+                msg_id = f"spawn_entry:{name}"
                 self.send_input(
                     name,
                     UserRequest(
                         text=blueprint["entry_prompt"],
-                        metadata={"workflow_flag": workflow_flag},
+                        metadata={
+                            "workflow_flag": workflow_flag,
+                            "type": "spawn_entry",
+                            "msg_id": msg_id,
+                        },
                     ),
                 )
+                # 发送方事实：entry_prompt 由父 agent（若存在）发起。
+                if parent is not None and self._store is not None:
+                    parent_log = self._store.log_for(parent.pid)
+                    if parent_log is not None:
+                        parent_log.record_edge(
+                            msg_id=msg_id, to=name, kind="spawn_entry",
+                            text=blueprint["entry_prompt"],
+                        )
 
         logger.info(
             f"spawn_from_script: workflow_flag='{workflow_flag}' "
@@ -817,16 +831,25 @@ class Kernel:
 
         store 为 None（持久化关闭）时仍创建纯内存 SessionLog——
         "唯一咽喉点"语义不随配置分叉。
+
+        同时把 log 挂到 adapter（若支持 _record_edges），使 KBA 的
+        publish/direct 路径能落发送方事实（edge 事件）。
         """
         from ..core.session.session_log import SessionLog
 
         if self._store is None:
-            return SessionLog(conv_id="ephemeral", pid=pid, store=None)
-        return self._store.create_log(
-            pid,
-            parent=parent.pid if parent else None,
-            manifest_provider=lambda: self._probe_manifest(harness, runtime),
-        )
+            log = SessionLog(conv_id="ephemeral", pid=pid, store=None)
+        else:
+            log = self._store.create_log(
+                pid,
+                parent=parent.pid if parent else None,
+                manifest_provider=lambda: self._probe_manifest(harness, runtime),
+            )
+
+        adapter = getattr(runtime, "adapter", None)
+        if adapter is not None and hasattr(adapter, "_record_edges"):
+            adapter._session_log = log
+        return log
 
     def _probe_manifest(self, harness, runtime) -> dict:
         """计算当前装配清单（T9 接入 compute_manifest；失败一律返回 {}）。
@@ -908,20 +931,34 @@ class Kernel:
                 in self.message_bus.get_subscribers_of(runtime.pid)
             )
             if not parent_subscribed:
+                msg_id = new_msg_id()
+                text = (
+                    f"[{runtime.pid}] "
+                    f"{'异常退出' if runtime.error else '已完成'}。\n"
+                    f"{runtime.last_output}"
+                )
                 self.send_input(runtime.parent.pid, UserRequest(
-                    text=(
-                        f"[{runtime.pid}] "
-                        f"{'异常退出' if runtime.error else '已完成'}。\n"
-                        f"{runtime.last_output}"
-                    ),
+                    text=text,
                     metadata={
                         "type": "child_finished",
                         "pid": runtime.pid,
                         "workflow_flag": runtime.workflow_flag,
                         "duration": duration,
                         "error": runtime.error,
+                        "from": runtime.pid,
+                        "msg_id": msg_id,
                     },
                 ))
+                # 发送方事实：child_finished 由内核盖章（发送方 = 子 agent）。
+                child_log = (
+                    self._store.log_for(runtime.pid)
+                    if self._store is not None else None
+                )
+                if child_log is not None:
+                    child_log.record_edge(
+                        msg_id=msg_id, to=runtime.parent.pid,
+                        kind="child_finished", text=text,
+                    )
                 logger.debug(
                     f"_on_agent_finished: child_finished sent to "
                     f"parent='{runtime.parent.pid}'"

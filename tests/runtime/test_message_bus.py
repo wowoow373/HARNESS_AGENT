@@ -6,9 +6,12 @@
 """
 
 import asyncio
+import re
 import pytest
 from harness.runtime.message_bus import MessageBus
 from harness.interfaces.types import TextEvent, StopEvent
+
+MSG_ID_RE = re.compile(r"^M-[0-9a-f]{8}$")
 
 
 # ── Helpers ──
@@ -78,7 +81,7 @@ async def test_publish_routes_to_active_subscriber():
     msg = q.get_nowait()
     assert msg.from_pid == "collector"
     assert msg.content == "hello"
-    assert msg.metadata == {}
+    assert MSG_ID_RE.match(msg.metadata["msg_id"])
 
 
 @async_test
