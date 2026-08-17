@@ -167,6 +167,11 @@ def measure_lsn_gap(replays: Dict[str, ReplayResult]) -> int:
     return max(0, global_max + 1 - total_events)
 
 
+def plan_redelivery(replays, restarted, *, script_entry_prompts=None):
+    """配对修复重投计划（T12 填充；当前恒为空）。"""
+    return []
+
+
 def _edge_from_talk_to(record: ToolCallRecord, *, source_pid: str) -> Optional[Edge]:
     """talk_to 的发送方事实：arguments 含目标与文本，result JSON 含 msg_id。"""
     if record.tool_name != "talk_to" or not record.result:

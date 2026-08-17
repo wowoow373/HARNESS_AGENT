@@ -151,6 +151,11 @@ class SessionStore:
         return self._enabled
 
     @property
+    def root_path(self) -> Path:
+        """会话根目录（boot 用 store.root_path / conv_id 定位会话目录）。"""
+        return self._root
+
+    @property
     def conv_id(self) -> Optional[str]:
         return self._conv_id
 
@@ -220,6 +225,10 @@ class SessionStore:
 
     def writer_for(self, pid: str) -> Optional[_LogWriter]:
         return self._writers.get(pid)
+
+    def log_for(self, pid: str):
+        """返回已注册的 SessionLog（boot 种子步骤复用 create_log 接线的同一对象）。"""
+        return self._logs.get(pid)
 
     def create_log(self, pid: str, *, parent: Optional[str] = None,
                    manifest_provider=None):

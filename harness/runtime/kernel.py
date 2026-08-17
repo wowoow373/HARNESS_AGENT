@@ -117,7 +117,7 @@ class Kernel:
     # ------------------------------------------------------------------
 
     def spawn_root(self, harness, call_llm=None) -> str:
-        """创建 Mode A 根 agent（pid="root", mode="continuous"）。
+        """创建并启动 Mode A 根 agent（= _create_root + 控制台事件 + _start_agent）。
 
         Args:
             harness: 装配好的 Harness 实例。
@@ -127,8 +127,25 @@ class Kernel:
         Returns:
             pid: 固定为 "root"。
         """
+        runtime = self._create_root(harness, call_llm)
+
+        # 推送 SystemConsole 事件（仅公开 spawn 路径；boot resume 不重发）
+        asyncio.create_task(
+            self._console.send(AgentSpawned(pid=runtime.pid, parent=None))
+        )
+
+        self._start_agent(runtime.pid)
+        logger.info(f"spawn_root: pid='{runtime.pid}' created and started")
+        return runtime.pid
+
+    def _create_root(self, harness, call_llm=None) -> 'AgentRuntime':
+        """创建根 agent 但不启动（boot 四步序的第 1 步使用）。
+
+        步骤与拆分前 spawn_root 的创建侧完全一致：建 runtime、挂 adapter、
+        SessionLog 先行接 orchestrator、注册进程表、记录 workflow。
+        不推送 AgentSpawned、不创建运行 task。
+        """
         from .agent_runtime import AgentRuntime
-        from .bridge_adapter import KernelBridgeAdapter
 
         pid = "root"
 
@@ -157,12 +174,19 @@ class Kernel:
         self.runtime_table[pid] = runtime
         self.input_queues[pid] = asyncio.Queue()
 
-        # 5. 推送 SystemConsole 事件
-        asyncio.create_task(
-            self._console.send(AgentSpawned(pid=pid, parent=None))
-        )
+        # 5. 记录 workflow（创建侧事实，boot Mode A 同样适用）
+        self.workflow_table["wf_root"] = [pid]
+        runtime.workflow_flag = "wf_root"
 
-        # 6. 启动 asyncio Task
+        return runtime
+
+    def _start_agent(self, pid: str) -> None:
+        """启动已注册 agent 的运行 task（boot 四步序的第 4 步使用）。
+
+        即原 spawn_root 的 asyncio.create_task(...) + done_callback。
+        需要运行中的事件循环。
+        """
+        runtime = self.runtime_table[pid]
         task = asyncio.create_task(runtime.run())
         self._tasks[pid] = task
         task.add_done_callback(
@@ -171,12 +195,197 @@ class Kernel:
             )
         )
 
-        # 7. 记录 workflow
-        self.workflow_table["wf_root"] = [pid]
-        runtime.workflow_flag = "wf_root"
+    # ------------------------------------------------------------------
+    # boot —— fresh/resume 统一入口
+    # ------------------------------------------------------------------
 
-        logger.info(f"spawn_root: pid='{pid}' created and started")
-        return pid
+    async def boot(self, conv_id=None, *, force: bool = False,
+                   harness=None, call_llm=None, script_path=None):
+        """统一启动入口：conv_id 为 None → fresh；否则 resume。
+
+        fresh：begin_session(None) + 原 spawn 路径（与现状一致）。
+        resume 四步序（设计第五节 Boot-Resume 时序图）：
+          1. 创建所有（Mode A 仅 root；Mode B 重跑脚本，不启动不投 entry）
+          2. 种子（replay → 物理截断半行 → seed）
+          3. 配对修复（T12 的 plan_redelivery 注入点，此处预留调用）
+          4. 启动所有（_start_agent）
+
+        接管顺序约束：begin_session + restore_sequencer 必须先于任何
+        create_log（Sequencer 按引用捕获，restore 会替换对象）。
+
+        Args:
+            conv_id: None → fresh；否则恢复该会话。
+            force: 强制接管（owner 冲突/manifest 硬失败/脚本 sha1 不一致
+                   降级为告警）。
+            harness: Mode A 根 agent 的装配实例。
+            call_llm: async LLM callable。
+            script_path: Mode B 重跑的 workflow 脚本路径。
+
+        Returns:
+            BootReport（conv_id/mode/status_before/replayed/warnings 等）。
+        """
+        from ..core.session.boot import BootReport
+
+        if self._store is None or conv_id is None:
+            # fresh 路径：与现状完全一致
+            if self._store is not None:
+                self._store.begin_session(None)
+            if script_path is not None:
+                self.spawn_from_script(script_path, parent=None)
+            else:
+                self.spawn_root(harness, call_llm)
+            return BootReport(
+                conv_id=self._store.conv_id if self._store else "",
+                mode="fresh")
+
+        return await self._boot_resume(
+            conv_id, force=force, harness=harness,
+            call_llm=call_llm, script_path=script_path)
+
+    async def _boot_resume(self, conv_id: str, *, force: bool, harness,
+                           call_llm, script_path):
+        """resume 主路径：所有权校验 → 重放 → manifest 校验 → 接管 → 四步序。"""
+        from ..core.session.boot import BootReport, used_tool_names
+        from ..core.session.exceptions import BootError, SessionOwnerConflict
+        from ..core.session.ids import pid_alive, pid_from_token
+        from ..core.session.manifest import diff_manifest
+        from ..core.session.replay import (
+            RESUME_MARKER, measure_lsn_gap, plan_redelivery, scan_session,
+        )
+        from ..interfaces.types import Message
+
+        store = self._store
+        index = store.read_index(conv_id)
+        conv_dir = store.root_path / conv_id
+        if index is None and not conv_dir.is_dir():
+            raise BootError(f"会话 '{conv_id}' 不存在于 {store.root_path}")
+        index = index or store.rebuild_index(conv_id)
+
+        report = BootReport(conv_id=conv_id, mode="resume",
+                            status_before=index.get("status", "unknown"))
+
+        # ── 所有权接管（令牌 + pid 活性 + force）──
+        # owner 双形状兼容：begin_session 写 dict，旧投影可能是纯字符串
+        owner = index.get("owner")
+        token = owner.get("token") if isinstance(owner, dict) else owner
+        if not isinstance(token, str):
+            token = None
+        if token and not force:
+            owner_pid = pid_from_token(token)
+            if owner_pid is not None:
+                try:
+                    owner_alive = pid_alive(owner_pid)
+                except NotImplementedError:
+                    # 平台不支持探活 → 无法确认存活，保守放行
+                    owner_alive = False
+                    report.warnings.append(
+                        "当前平台不支持进程探活，owner 活性未校验")
+                if owner_alive:
+                    raise SessionOwnerConflict(
+                        f"会话 '{conv_id}' 正被进程 {owner_pid} 持有；"
+                        f"如确认该进程已退出，使用 --force 强制接管。")
+
+        # ── 重放（读侧先行，不建文件）──
+        replays = scan_session(conv_dir)
+        if not replays:
+            raise BootError(f"会话 '{conv_id}' 没有任何 agent 日志")
+        report.lsn_gap = measure_lsn_gap(replays)
+        if report.lsn_gap:
+            report.warnings.append(
+                f"LSN 空洞 {report.lsn_gap}：上次运行有 {report.lsn_gap} 个"
+                f"事件已发号未落盘（崩溃损失）")
+        for pid, r in replays.items():
+            if r.truncated_bytes:
+                report.warnings.append(
+                    f"agent '{pid}' 日志尾部截断 {r.truncated_bytes} 字节（半行）")
+
+        # ── manifest 分级校验 ──
+        probe = self._probe_manifest(harness, None) if harness else {}
+        diff = diff_manifest(index.get("manifest"), probe,
+                             used_tool_names=used_tool_names(replays))
+        report.warnings.extend(diff.soft)
+        if diff.hard and not force:
+            raise BootError("manifest 硬校验失败：\n  " + "\n  ".join(diff.hard)
+                            + "\n如确认继续，使用 --force。")
+        if diff.hard:
+            report.warnings.extend(f"[force 降级] {h}" for h in diff.hard)
+
+        # ── Mode 判定：有 script 记录 → Mode B；否则 Mode A ──
+        script_meta = index.get("script")
+        mode_b = script_meta is not None and script_path is not None
+        if mode_b:
+            self._verify_script_sha1(script_meta, script_path, force, report)
+        elif replays.get("root") is None:
+            raise BootError(f"会话 '{conv_id}' 缺少 root 日志，无法恢复")
+
+        # ── 接管会话（index owner 更新 + sequencer 恢复）──
+        # 必须先于任何 create_log：Sequencer 按引用捕获，restore 会替换对象
+        store.begin_session(conv_id)
+        store.restore_sequencer(max(r.max_lsn for r in replays.values()) + 1)
+
+        # ── 第 1 步：创建所有（不启动、不投 entry、不重发控制台事件）──
+        if mode_b:
+            self._create_agents_from_script(script_path, parent=None)
+        else:
+            self._create_root(harness, call_llm)
+
+        # ── 第 2 步：种子（append 前物理截断半行；只 seed 将重启的 agent）──
+        restarted = set(self.runtime_table.keys())
+        for pid in sorted(restarted):
+            r = replays.get(pid)
+            if r is None:
+                continue                       # 新 agent（Mode B 可能出现）
+            session_log = store.log_for(pid)
+            if session_log is None:
+                continue
+            if r.truncated_bytes:
+                # 物理截断须在 writer 懒打开（首次 flush）之前——此刻尚无 writer
+                log_path = store.agent_log_path(pid)
+                with open(log_path, "r+b") as fh:
+                    fh.truncate(log_path.stat().st_size - r.truncated_bytes)
+            session_log.seed(history=r.history,
+                             tool_call_records=r.tool_call_records,
+                             last_seq=r.last_seq, last_lsn=r.max_lsn)
+            if r.interrupted_at:
+                # resume_marker：只在内存合成，永不落盘（幂等）
+                session_log.history.append(Message(
+                    role="user",
+                    content=RESUME_MARKER.format(call_id=r.interrupted_at)))
+                report.warnings.append(
+                    f"agent '{pid}' 在工具调用 {r.interrupted_at} 处中断，"
+                    f"已注入恢复标记")
+            report.replayed.append(pid)
+
+        # ── 第 3 步：配对修复（T12 填充；plan_redelivery 当前恒为空）──
+        for plan in plan_redelivery(replays, restarted):
+            store_key = plan.dedup_key
+            if plan.target in restarted and store_key:
+                self.send_input(plan.target, plan.request)
+                report.redelivered.append(store_key)
+
+        # ── 第 4 步：启动所有 ──
+        for pid in sorted(restarted):
+            if pid not in self._tasks or self._tasks[pid].done():
+                self._start_agent(pid)
+
+        return report
+
+    @staticmethod
+    def _verify_script_sha1(script_meta: dict, script_path: str,
+                            force: bool, report) -> None:
+        """Mode B 前置校验：脚本 sha1 不一致 → 硬失败（--force 降级）。"""
+        import hashlib
+        from ..core.session.exceptions import BootError
+
+        with open(script_path, "rb") as fh:
+            actual = hashlib.sha1(fh.read()).hexdigest()
+        expect = script_meta.get("sha1")
+        if expect and actual != expect:
+            msg = (f"脚本已修改：{script_path}\n  记录: {expect}\n"
+                   f"  当前: {actual}")
+            if not force:
+                raise BootError(msg + "\n如确认继续，使用 --force。")
+            report.warnings.append(f"[force 降级] {msg}")
 
     def send_input(self, pid: str, request: UserRequest) -> None:
         """向指定 agent 投递 UserRequest。
@@ -278,13 +487,20 @@ class Kernel:
         )
 
     def spawn_from_script(
-        self, script_path: str, parent=None
+        self, script_path: str, parent=None, *,
+        autostart: bool = True, deliver_entry: bool = True,
     ) -> dict:
         """Load a workflow script, create multiple agents and start them.
 
         Args:
             script_path: Absolute path to the workflow script.
             parent: Parent AgentRuntime, None for top-level agents.
+            autostart: True（默认）时创建后立即推送 AgentSpawned 并启动 task；
+                       False 仅创建（boot 四步序的第 1 步使用，由 boot 统一
+                       _start_agent，且 resume 不重发控制台 spawn 事件）。
+            deliver_entry: True（默认）时启动后投递 entry_prompt；False 跳过
+                       （boot resume 的 entry 重投由配对修复负责，见 T12）。
+            默认 True/True 与拆分前行为逐字节等价。
 
         Returns:
             {"workflow_flag": str, "agents": [{"pid": str, "parent": str|None,
@@ -301,11 +517,65 @@ class Kernel:
         if self._shutdown:
             raise RuntimeError("kernel is shutting down, spawn rejected")
 
+        from . import decorators
+
+        created = self._create_agents_from_script(script_path, parent)
+        workflow_flag = created["workflow_flag"]
+        created_pids = created["created_pids"]
+
+        # ── Step 6/7: 推送 SystemConsole 事件 + 启动 asyncio Tasks ──
+        if autostart:
+            try:
+                _ = asyncio.get_running_loop()
+                _has_loop = True
+            except RuntimeError:
+                _has_loop = False
+
+            if _has_loop:
+                for name in created_pids:
+                    asyncio.create_task(
+                        self._console.send(
+                            AgentSpawned(
+                                pid=name, parent=parent.pid if parent else None
+                            )
+                        )
+                    )
+                for name in created_pids:
+                    self._start_agent(name)
+
+        # ── Step 9: Deliver entry_prompts ──
+        if deliver_entry:
+            for name, blueprint in decorators._agent_registry.items():
+                self.send_input(
+                    name,
+                    UserRequest(
+                        text=blueprint["entry_prompt"],
+                        metadata={"workflow_flag": workflow_flag},
+                    ),
+                )
+
+        logger.info(
+            f"spawn_from_script: workflow_flag='{workflow_flag}' "
+            f"created {len(created_pids)} agent(s): {created_pids}"
+        )
+
+        # ── Step 10: Return ──
+        return {
+            "workflow_flag": workflow_flag,
+            "agents": created["agents"],
+        }
+
+    def _create_agents_from_script(self, script_path: str, parent=None) -> dict:
+        """加载 workflow 脚本并创建全部 agent，但不启动（boot 第 1 步使用）。
+
+        覆盖原 spawn_from_script 的 step 1–5.5（workflow_flag、加载、校验、
+        创建 runtime、注册订阅）与 step 8（workflow_table 记录——创建侧事实）。
+        不推送 AgentSpawned、不创建运行 task、不投递 entry_prompt。
+        """
         import sys
         import importlib.util
         from . import decorators
         from .agent_runtime import AgentRuntime, AgentState
-        from .bridge_adapter import KernelBridgeAdapter
 
         # ── Step 1: Generate workflow_flag ──
         self._spawn_counter += 1
@@ -451,56 +721,12 @@ class Kernel:
                 f"'{sub.subscriber}' → '{sub.publisher}'"
             )
 
-        # ── Step 6: Push SystemConsole events ──
-        try:
-            _ = asyncio.get_running_loop()
-            _has_loop = True
-        except RuntimeError:
-            _has_loop = False
-
-        if _has_loop:
-            for name in created_pids:
-                asyncio.create_task(
-                    self._console.send(
-                        AgentSpawned(
-                            pid=name, parent=parent.pid if parent else None
-                        )
-                    )
-                )
-
-        # ── Step 7: Start asyncio Tasks ──
-        if _has_loop:
-            for name in created_pids:
-                runtime = self.runtime_table[name]
-                task = asyncio.create_task(runtime.run())
-                self._tasks[name] = task
-                task.add_done_callback(
-                    lambda t, r=runtime: asyncio.create_task(
-                        self._on_agent_finished(r)
-                    )
-                )
-
-        # ── Step 8: Record workflow mapping ──
+        # ── Step 8: Record workflow mapping（创建侧事实）──
         self.workflow_table[workflow_flag] = created_pids.copy()
 
-        # ── Step 9: Deliver entry_prompts ──
-        for name, blueprint in decorators._agent_registry.items():
-            self.send_input(
-                name,
-                UserRequest(
-                    text=blueprint["entry_prompt"],
-                    metadata={"workflow_flag": workflow_flag},
-                ),
-            )
-
-        logger.info(
-            f"spawn_from_script: workflow_flag='{workflow_flag}' "
-            f"created {len(created_pids)} agent(s): {created_pids}"
-        )
-
-        # ── Step 10: Return ──
         return {
             "workflow_flag": workflow_flag,
+            "created_pids": created_pids,
             "agents": agent_results,
         }
 
