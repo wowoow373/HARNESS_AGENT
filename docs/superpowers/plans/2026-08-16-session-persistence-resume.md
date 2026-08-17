@@ -2406,6 +2406,12 @@ git commit -m "feat(session): instrument orchestrator with R0-R6 record points a
 - Modify: `harness/runtime/runtime.py`
 - Test: `tests/session/test_kernel_wiring.py`
 
+> **【执行期修订】**（T7 质量评审结论，已回写实现）
+> 1. `create_log` 增加重复 pid 守卫：同名 log **从未 begun 且无 writer** → 允许替换（spawn 回滚后重试路径）；已 begun 或已有 writer → raise ValueError（双 writer 同文件 = 日志分叉不可恢复）。注意语义后果：spawn_from_script 的"同名替换"分支在持久化开启（默认）时对该分支已 begun 的 agent 变为响亮失败——有意为之（失败方向：响亮的工具错误 > 静默的日志损坏）。
+> 2. `_run_async` / `_run_from_script_async` 的 finally 在 `_close_store()` 之前 `await asyncio.gather(*kernel._tasks.values(), return_exceptions=True)`——等中途 spawn 的子 agent 收尾，避免其 R6 finalize 撞上 writer 已关闭而丢 session_end（resume 误标 crashed）。
+> 3. 增加 Runtime 级接线测试（_open_store/_close_store 生产路径：conv 目录生成、header+session_end、index 终态 paused/owner=None）。
+> 4. T6 评审转入：`test_no_llm_records_stop` 补钉 no_llm 分支的 stop 落盘。
+
 - [ ] **Step 1: 写失败测试**
 
 `tests/session/test_kernel_wiring.py`：
