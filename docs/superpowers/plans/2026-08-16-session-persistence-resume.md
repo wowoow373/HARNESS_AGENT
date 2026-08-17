@@ -4736,3 +4736,7 @@ git commit -m "docs(session): document persistence & resume architecture and con
 
 - **Important（已修，f236647）**：Mode B 会话 index.json 丢失/损坏后不可恢复——`rebuild_index` 写 `script=None`，`_boot_resume` 的 `mode_b` 判定失效，即便用户显式传 `script_path` 也落入 Mode A 而 `BootError("缺少 root 日志")`。修法：`script_meta` 为 None 但 `script_path` 在手且 `replays` 无 root → 推断 Mode B（sha1 无从比对则告警放行）；`_verify_script_sha1` 容忍 `script_meta=None`。补测试 `test_rebuild_index_recovers_mode_b_with_script`。
 - **deferred Minors（记录，未修）**：`rebuild_index` 投影缺 `manifest`（Mode A 索引损坏重建后 manifest 分级校验被静默跳过）与缺 `final_output`/`execution_time`（`ReplayResult.final_output` 已可用可零成本补）；index 的 `execution_time` 与盘上 `session_end.execution_time` 时钟源不同（started_at vs _start_time）；`_finalize_fallback`/`_read_ondisk_last_seq` 在 degraded 兜底路径做同步 I/O；嵌套 spawn 的 `spawn_entry` 边只作取证不参与重投（嵌套 agent 从不进 restarted）；`_build_trajectory` 与 `_extract_last_output`/sync `orchestrator.py` 三处重复「最后 assistant 文本」。
+
+## 完成后修订（2026-08-17）
+
+- **默认存储根目录变更**：`sessions.root` 默认值 `./sessions` → `./.harness/sessions`（隐藏目录，避免运行产物散落项目顶层）。影响面：`SessionConfig.root` 默认值、`test_config_sequencer` 5 处 pin 断言、`.gitignore`（`sessions/` → `.harness/`）、ARCHITECTURE.md 第十节、复盘文档运行指南。旧默认路径下的存量会话目录需手工迁移（`mv sessions .harness/sessions`）或经 `harness.yaml` 显式指回。

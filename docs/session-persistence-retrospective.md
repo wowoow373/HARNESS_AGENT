@@ -85,7 +85,7 @@
 
 ```yaml
 sessions:
-  root: ./sessions      # 默认
+  root: ./.harness/sessions      # 默认
   enabled: true          # 默认
 ```
 
@@ -95,7 +95,7 @@ sessions:
 # 全新启动
 python main.py run --runtime
 
-# 恢复指定会话（会话 id 见 sessions/ 目录名，形如 conv-20260817-151234-abcd）
+# 恢复指定会话（会话 id 见 .harness/sessions/ 目录名，形如 conv-20260817-151234-abcd）
 python main.py run --runtime --resume conv-20260817-151234-abcd
 
 # 强制接管（所有权冲突 / manifest 硬校验降级）
@@ -115,6 +115,6 @@ python main.py workflow my_workflow.py --resume <conv_id> [--force]
 ### 说明
 
 - `--resume` 只在 `--runtime` 模式下生效（Mode A 不带 `--runtime` 会收到警告并被忽略）。
-- 会话 id 自动生成（`conv-<时间戳>-<4位hex>`），存在 `sessions/<conv_id>/` 下；恢复时从目录名取。
+- 会话 id 自动生成（`conv-<时间戳>-<4位hex>`），存在 `.harness/sessions/<conv_id>/` 下；恢复时从目录名取。
 - 运行内交互命令：`/agents` `/kill <pid>` `/end <flag>` `/talk <pid>` `/exit`。
-- 持久化默认开启；`sessions/` 目录与 `.env` 已加入 `.gitignore`。
+- 持久化默认开启；`.harness/` 目录与 `.env` 已加入 `.gitignore`。

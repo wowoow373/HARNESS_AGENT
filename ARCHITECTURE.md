@@ -671,7 +671,7 @@ interface CodeContextAssembler extends ContextAssembler:
 ## 十、会话持久化与恢复
 
 - 内核机制（非插件），默认开启；配置面仅 `sessions.root` / `sessions.enabled`
-- 存储：`sessions/<conv_id>/agents/<pid>.jsonl`（append-only 事实，唯一不可丢）
+- 存储：`./.harness/sessions/<conv_id>/agents/<pid>.jsonl`（append-only 事实，唯一不可丢）
   + `index.json`（原子重写的投影，可从 jsonl 重建）
 - 热路径零 I/O：内存即时、轮次边界批量 flush（page cache）、fsync 仅在
   finalize/close；单写协程 per 文件
