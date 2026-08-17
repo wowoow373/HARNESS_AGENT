@@ -157,7 +157,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # 启动会话
     if args.runtime:
-        return _run_with_runtime(harness)
+        return _run_with_runtime(
+            harness, config_path,
+            resume=getattr(args, "resume", None),
+            force=getattr(args, "force", False),
+        )
     else:
         try:
             harness.run()
@@ -171,21 +175,28 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 0
 
 
-def _run_with_runtime(harness) -> int:
+def _run_with_runtime(harness, config_path, resume=None, force=False) -> int:
     """使用 Runtime 层启动 agent（Mode A 交互式对话）。"""
     from harness.runtime.cli_console import CliConsole
     from harness.runtime.runtime import Runtime
+    from harness.core.session.config import load_session_config
+    from harness.core.session.exceptions import BootError, SessionOwnerConflict
+
+    session_config = load_session_config(config_path)
 
     console = CliConsole(mode="mode_a")
-    runtime = Runtime(console)
+    runtime = Runtime(console, session_config=session_config)
 
     logger = logging.getLogger(__name__)
     logger.info("Starting agent with Runtime layer (Mode A)")
 
     try:
-        runtime.run(harness)
+        runtime.run(harness, resume=resume, force=force)
     except KeyboardInterrupt:
         print("\n[系统] 收到中断信号，正在退出...")
+    except (SessionOwnerConflict, BootError) as e:
+        print(f"恢复失败: {e}")
+        return 2
     except Exception as e:
         print(f"Error: {e}")
         return 1
@@ -210,17 +221,28 @@ def _cmd_workflow(args: argparse.Namespace) -> int:
 
     from harness.runtime.cli_console import CliConsole
     from harness.runtime.runtime import Runtime
+    from harness.core.session.config import load_session_config
+    from harness.core.session.exceptions import BootError, SessionOwnerConflict
+
+    session_config = load_session_config(getattr(args, "config", None))
 
     console = CliConsole(mode="mode_b")
-    runtime = Runtime(console)
+    runtime = Runtime(console, session_config=session_config)
 
     logger = logging.getLogger(__name__)
     logger.info("Starting workflow (Mode B): %s", script_path)
 
     try:
-        runtime.run_from_script(os.path.abspath(script_path))
+        runtime.run_from_script(
+            os.path.abspath(script_path),
+            resume=getattr(args, "resume", None),
+            force=getattr(args, "force", False),
+        )
     except KeyboardInterrupt:
         print("\n[系统] 收到中断信号，正在退出...")
+    except (SessionOwnerConflict, BootError) as e:
+        print(f"恢复失败: {e}")
+        return 2
     except Exception as e:
         print(f"Error: {e}")
         import traceback
@@ -307,15 +329,8 @@ def _fallback_assemble():
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI 主入口。
-
-    Args:
-        argv: 命令行参数列表。为 None 时使用 sys.argv[1:]。
-
-    Returns:
-        int: 退出码。
-    """
+def build_parser() -> argparse.ArgumentParser:
+    """构建 CLI 参数解析器（含 init/run/workflow 三个子命令）。"""
     parser = argparse.ArgumentParser(
         prog="harness",
         description="Harness Agent Template — modular agent framework",
@@ -362,6 +377,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Use Runtime layer (Mode A interactive with /commands support)",
     )
+    run_parser.add_argument(
+        "--resume",
+        metavar="CONV_ID",
+        default=None,
+        help="恢复指定会话；无则全新启动",
+    )
+    run_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="配合 --resume 强制接管所有权 / 降级 manifest 硬校验",
+    )
 
     # ---- workflow ----
     workflow_parser = subparsers.add_parser(
@@ -377,7 +403,31 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable DEBUG log level",
     )
+    workflow_parser.add_argument(
+        "--resume",
+        metavar="CONV_ID",
+        default=None,
+        help="恢复指定会话；无则全新启动",
+    )
+    workflow_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="配合 --resume 强制接管所有权 / 降级 manifest 硬校验",
+    )
 
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI 主入口。
+
+    Args:
+        argv: 命令行参数列表。为 None 时使用 sys.argv[1:]。
+
+    Returns:
+        int: 退出码。
+    """
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.command is None:

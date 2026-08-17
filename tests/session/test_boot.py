@@ -1,5 +1,6 @@
 """Kernel.boot —— fresh/resume 统一入口、所有权、manifest 校验、种子恢复。"""
 
+import asyncio
 import json
 import sys
 
@@ -338,6 +339,43 @@ class TestBootGuards:
         # 未接管：index 保持 paused / owner None
         idx = json.loads(idx_path.read_text(encoding="utf-8"))
         assert idx["owner"] is None and idx["status"] == "paused"
+
+    @run_async
+    async def test_resume_rejects_path_traversal_conv_id(self, tmp_path):
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        with pytest.raises(BootError, match="非法会话"):
+            await kernel.boot(conv_id="../evil",
+                              harness=_harness_with(ExitImmediatelyAdapter()),
+                              call_llm=_async_llm)
+
+    @run_async
+    async def test_fresh_mode_b_records_script_meta(self, tmp_path):
+        script = tmp_path / "wf.py"
+        script.write_text(
+            "from harness.core.container import DIContainer\n"
+            "from harness.di import Harness\n"
+            "from harness.interfaces.input_adapter import InputAdapter\n"
+            "from harness.runtime.decorators import agent\n"
+            "@agent('worker', entry_prompt='do it')\n"
+            "def assemble_worker():\n"
+            "    c = DIContainer()\n"
+            "    c.register(InputAdapter, object())\n"
+            "    return Harness.from_container(c, call_llm=None)\n",
+            encoding="utf-8",
+        )
+        store = SessionStore(str(tmp_path))
+        kernel = Kernel(MockConsole(), store=store)
+        report = await kernel.boot(script_path=str(script), call_llm=_async_llm)
+        assert report.mode == "fresh"
+        # 等待 oneshot agent 跑完并关闭 store，避免泄漏 task
+        # （先 gather/close 再断言，断言失败也不会挂起 asyncio.run 收尾）
+        await asyncio.gather(*kernel._tasks.values())
+        await store.close()
+        idx = json.loads((tmp_path / store.conv_id / "index.json")
+                         .read_text(encoding="utf-8"))
+        assert idx["script"]["path"] == str(script)
+        assert idx["script"]["sha1"]
 
 
 class TestManifestGate:

@@ -237,9 +237,15 @@ class Kernel:
         from ..core.session.exceptions import BootError
 
         if conv_id is None:
-            # fresh 路径：与现状完全一致（store 可缺失）
+            # fresh 路径：与现状完全一致（store 可缺失），并记录 Mode B 脚本 meta
+            script_meta = None
+            if script_path is not None:
+                import hashlib
+                with open(script_path, "rb") as _fh:
+                    sha1 = hashlib.sha1(_fh.read()).hexdigest()
+                script_meta = {"path": script_path, "sha1": sha1}
             if self._store is not None:
-                self._store.begin_session(None)
+                self._store.begin_session(None, script=script_meta)
             if script_path is not None:
                 self.spawn_from_script(script_path, parent=None)
             else:
@@ -251,6 +257,11 @@ class Kernel:
         if self._store is None:
             raise BootError(
                 f"会话持久化未启用（store 缺失），无法 resume '{conv_id}'")
+
+        import os as _os
+        if not conv_id or _os.path.basename(conv_id) != conv_id \
+                or conv_id in (".", ".."):
+            raise BootError(f"非法会话 ID：'{conv_id}'")
 
         return await self._boot_resume(
             conv_id, force=force, harness=harness,

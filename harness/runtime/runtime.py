@@ -56,20 +56,23 @@ class Runtime:
     # 公开入口
     # ------------------------------------------------------------------
 
-    def run(self, harness) -> None:
+    def run(self, harness, *, resume=None, force=False) -> None:
         """同步入口 — 启动整个 Runtime（Mode A）。
 
         Args:
             harness: 装配好的 Harness 实例。其 container 属性
                      用于构造 AsyncLifecycleOrchestrator。
+            resume: 恢复的会话 ID；None 则全新启动。
+            force: 配合 resume 强制接管所有权 / 降级 manifest 硬校验。
         """
         try:
-            asyncio.run(self._run_async(harness))
+            asyncio.run(self._run_async(harness, resume=resume, force=force))
         except KeyboardInterrupt:
             # SIGINT 已在 _on_sigint 中处理
             pass
 
-    def run_from_script(self, script_path: str) -> None:
+    def run_from_script(self, script_path: str, *, resume=None,
+                        force=False) -> None:
         """Mode B 入口 — 直接启动 workflow 脚本。
 
         不创建 root agent。从脚本加载 agent 并启动，等待所有 agent
@@ -78,9 +81,15 @@ class Runtime:
         用法:
             console = CliConsole()
             Runtime(console).run_from_script("workflow.py")
+
+        Args:
+            script_path: workflow 脚本路径。
+            resume: 恢复的会话 ID；None 则全新启动。
+            force: 配合 resume 强制接管所有权 / 降级 manifest 硬校验。
         """
         try:
-            asyncio.run(self._run_from_script_async(script_path))
+            asyncio.run(self._run_from_script_async(
+                script_path, resume=resume, force=force))
         except KeyboardInterrupt:
             # SIGINT 已在 _on_sigint 中处理
             pass
@@ -90,14 +99,26 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _open_store(self):
-        """按配置创建 SessionStore 并开始会话（resume 路径在 T13 改为 boot 接管）。"""
+        """按配置创建 SessionStore（会话开始由 boot 负责）。"""
         from ..core.session.config import SessionConfig
         from ..core.session.store import SessionStore
 
         cfg = self._session_config or SessionConfig()
         self._store = SessionStore(cfg.root, enabled=cfg.enabled)
-        self._store.begin_session(None)
         return self._store
+
+    def _print_resume_summary(self, report) -> None:
+        """boot 完成后打印恢复摘要（fresh 静默）。"""
+        if report.mode != "resume":
+            return
+        parts = [f"重放 {len(report.replayed)} 个 agent"]
+        if report.redelivered:
+            parts.append(f"补投 {len(report.redelivered)} 条消息")
+        if report.lsn_gap:
+            parts.append(f"LSN 空洞 {report.lsn_gap}")
+        print(f"[系统] 已恢复会话 {report.conv_id}：" + "，".join(parts))
+        for w in report.warnings:
+            print(f"[系统] 警告：{w}")
 
     async def _close_store(self) -> None:
         """drain + fsync + close；降级的一次性提示（失败方向向下的最后一环）。"""
@@ -111,7 +132,7 @@ class Runtime:
             print(f"[系统] 警告：agent '{pid}' 的会话日志写盘降级，"
                   f"该 agent 日志可能不完整。")
 
-    async def _run_async(self, harness) -> None:
+    async def _run_async(self, harness, *, resume=None, force=False) -> None:
         """异步主流程。"""
         from .kernel import Kernel, make_async_llm
 
@@ -122,13 +143,15 @@ class Runtime:
             logger.info("Wrapped sync call_llm → async via asyncio.to_thread")
 
         # 2. 创建 Kernel（注入进程级 SessionStore）
-        # 注意：此处起若 Kernel 构造/spawn 抛错，store 永不 close
-        # （index 留 active + 活 owner）——由 T13 boot 的死主检测接管恢复。
+        # 注意：此处起若 Kernel 构造/boot 抛错，store 永不 close
+        # （index 留 active + 活 owner）——由 boot 的死主检测接管恢复。
         store = self._open_store()
         self._kernel = Kernel(self._console, store=store)
 
-        # 3. spawn root agent
-        self._kernel.spawn_root(harness, call_llm=call_llm)
+        # 3. boot（fresh/resume 统一入口：fresh 走 spawn，resume 走四步序）
+        report = await self._kernel.boot(
+            conv_id=resume, force=force, harness=harness, call_llm=call_llm)
+        self._print_resume_summary(report)
 
         # 4. 启动协程
         #    Mode A 不启动 _monitor_quiescence —— root agent 在 receive()
@@ -166,6 +189,7 @@ class Runtime:
             # post-sweep spawn 窗口：/exit 落地后在途 LLM 响应仍可能 spawn
             # 出新 agent（收不到此前的 sentinel）——收尾前再清扫一次
             if self._kernel is not None:
+                self._kernel._shutdown = True
                 self._kernel._signal_all_exit()
                 logger.info("waiting for %d agent(s) to finish: %s",
                             len(self._kernel._tasks),
@@ -177,27 +201,26 @@ class Runtime:
         # 8. 推送停止事件
         await self._console.send(RuntimeStopped())
 
-    async def _run_from_script_async(self, script_path: str) -> None:
+    async def _run_from_script_async(self, script_path: str, *, resume=None,
+                                     force=False) -> None:
         """Mode B 异步主流程。"""
         from .kernel import Kernel
 
         # 1. 创建 Kernel（注入进程级 SessionStore）
-        # 注意：此处起若 Kernel 构造/spawn 抛错，store 永不 close
-        # （index 留 active + 活 owner）——由 T13 boot 的死主检测接管恢复。
+        # 注意：此处起若 Kernel 构造/boot 抛错，store 永不 close
+        # （index 留 active + 活 owner）——由 boot 的死主检测接管恢复。
         store = self._open_store()
         self._kernel = Kernel(self._console, store=store)
 
-        # 2. 从脚本 spawn agent（无 parent）
-        result = self._kernel.spawn_from_script(script_path, parent=None)
+        # 2. boot（fresh/resume 统一入口：fresh 走 spawn，resume 走四步序）
+        report = await self._kernel.boot(
+            conv_id=resume, force=force, harness=None,
+            call_llm=None, script_path=script_path)
+        self._print_resume_summary(report)
 
         # 2a. 设置 CliConsole 的 all_finished 回调（Mode B 空输入退出用）
         if hasattr(self._console, 'set_all_finished_hook'):
             self._console.set_all_finished_hook(self._kernel.all_finished)
-
-        logger.info(
-            f"run_from_script: workflow_flag='{result['workflow_flag']}' "
-            f"with {len(result['agents'])} agent(s)"
-        )
 
         # 3. 启动系统输入处理
         task_sys = asyncio.create_task(
@@ -253,6 +276,7 @@ class Runtime:
             # post-sweep spawn 窗口：/exit 落地后在途 LLM 响应仍可能 spawn
             # 出新 agent（收不到此前的 sentinel）——收尾前再清扫一次
             if self._kernel is not None:
+                self._kernel._shutdown = True
                 self._kernel._signal_all_exit()
                 logger.info("waiting for %d agent(s) to finish: %s",
                             len(self._kernel._tasks),
@@ -261,9 +285,11 @@ class Runtime:
                                      return_exceptions=True)
             await self._close_store()
 
-        # 8. 收集最终输出
+        # 8. 收集最终输出（workflow_flag 从 runtime 派生，boot 后无 spawn 返回值）
         agents_results = []
+        workflow_flag = ""
         for pid, r in self._kernel.runtime_table.items():
+            workflow_flag = r.workflow_flag or workflow_flag
             agents_results.append({
                 "pid": pid,
                 "output": r.last_output,
@@ -276,7 +302,7 @@ class Runtime:
 
         # 9. 推送 WorkflowFinished
         await self._console.send(WorkflowFinished(
-            workflow_flag=result["workflow_flag"],
+            workflow_flag=workflow_flag,
             agents=agents_results,
         ))
 
