@@ -2411,6 +2411,12 @@ git commit -m "feat(session): instrument orchestrator with R0-R6 record points a
 > 2. `_run_async` / `_run_from_script_async` 的 finally 在 `_close_store()` 之前 `await asyncio.gather(*kernel._tasks.values(), return_exceptions=True)`——等中途 spawn 的子 agent 收尾，避免其 R6 finalize 撞上 writer 已关闭而丢 session_end（resume 误标 crashed）。
 > 3. 增加 Runtime 级接线测试（_open_store/_close_store 生产路径：conv 目录生成、header+session_end、index 终态 paused/owner=None）。
 > 4. T6 评审转入：`test_no_llm_records_stop` 补钉 no_llm 分支的 stop 落盘。
+>
+> **【执行期修订 2】**（T7 第二轮质量评审结论，已回写实现 d1b6224）
+> 1. **post-sweep spawn 窗口焊死**：/exit 落地（CommandExit 清扫）后在途 LLM 响应仍可能执行 spawn_workflow，新 agent 收不到 sentinel 成为孤儿 → finally 的 gather 永久挂起。双重关闭：(a) 清扫循环提取为 `Kernel._signal_all_exit()`（CommandExit 分支改为调用它），两个 finally 在 gather 前再清扫一次；(b) `spawn_from_script` 入口加 `_shutdown` 守卫（`raise RuntimeError("kernel is shutting down, spawn rejected")`，经 SpawnWorkflowTool 转为受控 ToolResult 错误）。无 await 介于清扫与 `_shutdown=True` 之间且 spawn_from_script 全程同步 → spawn 要么完整地先于清扫（被扫中）要么后于守卫翻转（被拒），无交错。
+> 2. **回归测试拆分**（评审 PoC 断言组合与守卫内在矛盾，经评审认可）：`test_post_shutdown_spawn_rejected_and_run_returns`（PoC 原形状，断言 run() 返回 + root session_end + 受控工具错误落盘 + index 无孤儿）；`test_unswept_child_reswept_in_finally`（task_sys 异常死亡路径，断言再清扫救回子 agent → child.jsonl 首 header 尾 session_end）。两测试在修复前均以 timeout 实证挂起。
+> 3. Minors：Mode B `await task_sys` 补 `except Exception`（不跳过收尾）；两处 `add_signal_handler` 的 except 补 `RuntimeError`（与 remove 侧对称，非主线程降级）。
+> 4. 遗留（转入 T13）：console 异常死亡路径下 finally 未置 `_shutdown=True`，drain 期间 spawn 仍可成功——不产生挂起（该 child 不在 gather 集合内），仅丢失 session_end 的保真度边缘；T13 触碰 runtime 时在 finally 再清扫前补一行 `self._kernel._shutdown = True`。
 
 - [ ] **Step 1: 写失败测试**
 
