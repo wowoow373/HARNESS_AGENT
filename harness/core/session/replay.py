@@ -167,9 +167,96 @@ def measure_lsn_gap(replays: Dict[str, ReplayResult]) -> int:
     return max(0, global_max + 1 - total_events)
 
 
-def plan_redelivery(replays, restarted, *, script_entry_prompts=None):
-    """配对修复重投计划（T12 填充；当前恒为空）。"""
-    return []
+@dataclass
+class RedeliveryPlan:
+    """一条待重投消息（boot 第 3 步执行）。"""
+    dedup_key: str          # msg_id 或确定性键（child_finished:{pid} 等）
+    target: str
+    request: "UserRequest"
+
+
+def plan_redelivery(replays, restarted, *,
+                    script_entry_prompts=None):
+    """跨日志配对修复计划（纯函数，boot 第 3 步调用）。
+
+    规则 1（msg_id 边）：发送方有 edge(msg_id→target) 且 target 未收到 → 重投。
+    规则 2（child_finished）：child 已结束而 parent 无 from==child 记录 → 重投。
+    规则 3（Mode B entry）：agent 旧日志存在但未收到 spawn_entry → 补投。
+    所有重投仅指向 restarted 集合内的 target。
+    """
+    from ...interfaces.types import UserRequest
+
+    plans = []
+    seen_keys = set()
+
+    # 规则 1：msg_id 边
+    for src in replays.values():
+        for edge in src.edges:
+            if edge.to_pid not in restarted or edge.to_pid not in replays:
+                continue
+            target = replays[edge.to_pid]
+            if edge.msg_id in target.received_msg_ids:
+                continue
+            if edge.msg_id in seen_keys:
+                continue
+            seen_keys.add(edge.msg_id)
+            plans.append(RedeliveryPlan(
+                dedup_key=edge.msg_id,
+                target=edge.to_pid,
+                request=UserRequest(text=edge.text, metadata={
+                    "from": edge.from_pid,
+                    "type": edge.kind,
+                    "msg_id": edge.msg_id,
+                    "redelivered": True,
+                }),
+            ))
+
+    # 规则 2：child_finished 确定性键
+    for child in replays.values():
+        if not child.parent or child.parent not in replays:
+            continue
+        if child.status == "crashed":
+            continue
+        parent = replays[child.parent]
+        if child.parent not in restarted:
+            continue
+        aware = any(m.get("from") == child.pid for m in parent.user_metas)
+        if aware:
+            continue
+        key = f"child_finished:{child.pid}"
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        plans.append(RedeliveryPlan(
+            dedup_key=key,
+            target=child.parent,
+            request=UserRequest(
+                text=f"子 agent '{child.pid}' 已完成。最终输出：{child.final_output}",
+                metadata={
+                    "type": "child_finished",
+                    "from": child.pid,
+                    "msg_id": key,
+                    "redelivered": True,
+                }),
+        ))
+
+    # 规则 3：Mode B entry 补投（半成品 spawn）
+    for pid, prompt in (script_entry_prompts or {}).items():
+        if pid not in restarted or pid not in replays:
+            continue
+        if f"spawn_entry:{pid}" in replays[pid].received_msg_ids:
+            continue
+        plans.append(RedeliveryPlan(
+            dedup_key=f"spawn_entry:{pid}",
+            target=pid,
+            request=UserRequest(text=prompt, metadata={
+                "type": "spawn_entry",
+                "msg_id": f"spawn_entry:{pid}",
+                "redelivered": True,
+            }),
+        ))
+
+    return plans
 
 
 def _edge_from_talk_to(record: ToolCallRecord, *, source_pid: str) -> Optional[Edge]:

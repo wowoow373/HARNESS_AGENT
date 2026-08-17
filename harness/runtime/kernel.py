@@ -348,9 +348,15 @@ class Kernel:
 
         # ── 第 1 步：创建所有（不启动、不投 entry、不重发控制台事件）──
         before = set(self.runtime_table.keys())
+        script_entry_prompts = None
         if mode_b:
             created = self._create_agents_from_script(script_path, parent=None)
             main_pid = created["created_pids"][0]   # step 3 校验保证非空
+            script_entry_prompts = {
+                a["pid"]: a["entry_prompt"]
+                for a in created.get("agents", [])
+                if a.get("entry_prompt")
+            }
         else:
             self._create_root(harness, call_llm)
             main_pid = "root"
@@ -402,10 +408,12 @@ class Kernel:
                     f"已注入恢复标记")
             report.replayed.append(pid)
 
-        # ── 第 3 步：配对修复（T12 填充；plan_redelivery 当前恒为空）──
-        for plan in plan_redelivery(replays, restarted):
+        # ── 第 3 步：配对修复 ──
+        for plan in plan_redelivery(replays, restarted,
+                                    script_entry_prompts=script_entry_prompts):
             store_key = plan.dedup_key
-            if plan.target in restarted and store_key:
+            if (plan.target in restarted and store_key
+                    and store_key not in report.redelivered):
                 self.send_input(plan.target, plan.request)
                 report.redelivered.append(store_key)
 
@@ -760,6 +768,7 @@ class Kernel:
                     "pid": name,
                     "parent": parent.pid if parent else None,
                     "metadata": blueprint.get("metadata", {}),
+                    "entry_prompt": blueprint.get("entry_prompt"),
                 })
 
             except Exception:
