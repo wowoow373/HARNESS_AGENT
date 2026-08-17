@@ -156,6 +156,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             return 1
 
     # 启动会话
+    if getattr(args, "resume", None) is not None and not args.runtime:
+        print("Warning: --resume 需要配合 --runtime 使用（当前被忽略）")
+
     if args.runtime:
         return _run_with_runtime(
             harness, config_path,

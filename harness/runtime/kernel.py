@@ -241,6 +241,10 @@ class Kernel:
             script_meta = None
             if script_path is not None:
                 import hashlib
+                import os as _os
+                if (not _os.path.isfile(script_path)
+                        or not _os.access(script_path, _os.R_OK)):
+                    raise BootError(f"脚本文件不存在或不可读: {script_path}")
                 with open(script_path, "rb") as _fh:
                     sha1 = hashlib.sha1(_fh.read()).hexdigest()
                 script_meta = {"path": script_path, "sha1": sha1}
