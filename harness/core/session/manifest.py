@@ -18,11 +18,14 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
+
+from ..exceptions import ComponentNotRegisteredError
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,8 @@ def compute_manifest(container, *, cached_tools: list,
         container: DIContainer。
         cached_tools: ToolRouter.list_tools() 的结果（_phase_init 缓存，
                       或 boot 探针用 build_tool_router 现算）。
+                      写入 SystemToolProvider/MCPAdapter 两键的 tool_names
+                      均为该 router 级并集，而非 per-provider 子集。
         call_llm: LLM callable（best-effort 取 .model）。
     """
     from ...interfaces import (
@@ -79,15 +84,32 @@ def compute_manifest(container, *, cached_tools: list,
                            (MCPAdapter, "MCPAdapter")):
         try:
             component = container.resolve(interface)
-        except Exception:
+        except ComponentNotRegisteredError:
+            continue
+        except Exception as e:
+            logger.warning("manifest: resolve %s failed: %s", key, e)
             continue
         fp = fingerprint_of(component)
         if key in ("SystemToolProvider", "MCPAdapter"):
             fp = {**fp, "tool_names": sorted(t.name for t in cached_tools)}
-        manifest[key] = fp
+        # 深拷贝：manifest 不得别名组件内部 dict（原地 mutation 会改变
+        # manifest_sha1，且 store 按引用落盘时 index.json 与 header sha 漂移）
+        manifest[key] = copy.deepcopy(fp)
 
     manifest["llm"] = {"model": getattr(call_llm, "model", None)}
     return manifest
+
+
+def _tool_names(m: Dict[str, Any]) -> Set[str]:
+    """manifest 中的工具名并集（SystemToolProvider/MCPAdapter 两键，容错非 dict）。"""
+    names: Set[str] = set()
+    for key in ("SystemToolProvider", "MCPAdapter"):
+        entry = m.get(key)
+        if isinstance(entry, dict):
+            value = entry.get("tool_names")
+            if isinstance(value, (list, tuple, set)):
+                names.update(value)
+    return names
 
 
 @dataclass
@@ -108,21 +130,22 @@ def diff_manifest(old: Optional[Dict[str, Any]], new: Dict[str, Any], *,
     if not old:
         return diff
 
-    # 硬：ContextAssembler id
-    old_asm = (old.get("ContextAssembler") or {}).get("id")
-    new_asm = (new.get("ContextAssembler") or {}).get("id")
+    # 硬：ContextAssembler id（存量 manifest 可能含非 dict 值，isinstance 守卫）
+    old_asm_entry = old.get("ContextAssembler")
+    new_asm_entry = new.get("ContextAssembler")
+    old_asm = old_asm_entry.get("id") if isinstance(old_asm_entry, dict) else None
+    new_asm = new_asm_entry.get("id") if isinstance(new_asm_entry, dict) else None
     if old_asm and new_asm and old_asm != new_asm:
         diff.hard.append(
             f"ContextAssembler 变化: {old_asm} → {new_asm}")
 
     # 硬：历史中实际用过的工具在当前工具集中缺失
-    current_tools: Set[str] = set(
-        (new.get("SystemToolProvider") or {}).get("tool_names", []))
+    current_tools = _tool_names(new)
     for missing in sorted(used_tool_names - current_tools):
         diff.hard.append(f"历史使用过的工具 '{missing}' 当前不可用")
 
     # 软：工具集增删（未被历史使用的）
-    old_tools = set((old.get("SystemToolProvider") or {}).get("tool_names", []))
+    old_tools = _tool_names(old)
     if old_tools != current_tools and not diff.hard:
         diff.soft.append(
             f"工具集变化: {sorted(old_tools)} → {sorted(current_tools)}")
@@ -131,9 +154,11 @@ def diff_manifest(old: Optional[Dict[str, Any]], new: Dict[str, Any], *,
     if old.get("GuideProvider") != new.get("GuideProvider"):
         diff.soft.append("GuideProvider 内容变化（如 AGENTS.md 已修改）")
 
-    # 软：llm model
-    old_model = (old.get("llm") or {}).get("model")
-    new_model = (new.get("llm") or {}).get("model")
+    # 软：llm model（存量 manifest 可能含非 dict 值，isinstance 守卫）
+    old_llm = old.get("llm")
+    new_llm = new.get("llm")
+    old_model = old_llm.get("model") if isinstance(old_llm, dict) else None
+    new_model = new_llm.get("model") if isinstance(new_llm, dict) else None
     if old_model != new_model:
         diff.soft.append(f"LLM model 变化: {old_model} → {new_model}")
 
