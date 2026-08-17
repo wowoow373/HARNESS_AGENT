@@ -75,6 +75,14 @@ class TestSpawnEntryRule:
         assert plan_redelivery({"w1": child}, restarted={"w1"},
                                script_entry_prompts={"w1": "去干活"}) == []
 
+    def test_new_agent_without_old_log_gets_entry(self):
+        """半成品 spawn：agent 无旧日志（replays 缺失）→ 仍补投 entry。"""
+        plans = plan_redelivery({"root": _replay("root")},
+                                restarted={"root", "w1"},
+                                script_entry_prompts={"w1": "去干活"})
+        assert any(p.dedup_key == "spawn_entry:w1" and p.target == "w1"
+                   for p in plans)
+
 
 class TestDedupKey:
     def test_plans_carry_stable_dedup_keys(self):

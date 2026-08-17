@@ -175,13 +175,15 @@ class RedeliveryPlan:
     request: "UserRequest"
 
 
-def plan_redelivery(replays, restarted, *,
-                    script_entry_prompts=None):
+def plan_redelivery(replays: Dict[str, ReplayResult],
+                    restarted: Set[str], *,
+                    script_entry_prompts: Optional[Dict[str, str]] = None
+                    ) -> List[RedeliveryPlan]:
     """跨日志配对修复计划（纯函数，boot 第 3 步调用）。
 
     规则 1（msg_id 边）：发送方有 edge(msg_id→target) 且 target 未收到 → 重投。
     规则 2（child_finished）：child 已结束而 parent 无 from==child 记录 → 重投。
-    规则 3（Mode B entry）：agent 旧日志存在但未收到 spawn_entry → 补投。
+    规则 3（Mode B entry）：agent 未收到 spawn_entry（含无旧日志的新 agent）→ 补投。
     所有重投仅指向 restarted 集合内的 target。
     """
     from ...interfaces.types import UserRequest
@@ -207,11 +209,11 @@ def plan_redelivery(replays, restarted, *,
                     "from": edge.from_pid,
                     "type": edge.kind,
                     "msg_id": edge.msg_id,
-                    "redelivered": True,
                 }),
             ))
 
     # 规则 2：child_finished 确定性键
+    # 注意：restarted 仅含顶层 agent（parent=None），嵌套子 agent 从不重启，故 child 不会在 restarted 中
     for child in replays.values():
         if not child.parent or child.parent not in replays:
             continue
@@ -236,15 +238,17 @@ def plan_redelivery(replays, restarted, *,
                     "type": "child_finished",
                     "from": child.pid,
                     "msg_id": key,
-                    "redelivered": True,
                 }),
         ))
 
-    # 规则 3：Mode B entry 补投（半成品 spawn）
+    # 规则 3：Mode B entry 补投（半成品 spawn；新 agent 无旧日志也补）
+    # script_entry_prompts 是 pid→entry_prompt 的 dict（每 pid 至多一次），
+    # 确定性 key `spawn_entry:{pid}` 天然唯一，无需 seen_keys。
     for pid, prompt in (script_entry_prompts or {}).items():
-        if pid not in restarted or pid not in replays:
+        if pid not in restarted:
             continue
-        if f"spawn_entry:{pid}" in replays[pid].received_msg_ids:
+        r = replays.get(pid)
+        if r is not None and f"spawn_entry:{pid}" in r.received_msg_ids:
             continue
         plans.append(RedeliveryPlan(
             dedup_key=f"spawn_entry:{pid}",
@@ -252,7 +256,6 @@ def plan_redelivery(replays, restarted, *,
             request=UserRequest(text=prompt, metadata={
                 "type": "spawn_entry",
                 "msg_id": f"spawn_entry:{pid}",
-                "redelivered": True,
             }),
         ))
 
