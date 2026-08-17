@@ -84,6 +84,42 @@ def _request_meta(request: UserRequest) -> dict:
     }
 
 
+def build_tool_router(container: DIContainer):
+    """合并 SystemToolProvider + MCPAdapter → (ToolRouter, List[ToolDefinition])。
+
+    _phase_init 与 Kernel boot 探针（manifest 计算）共用的装配逻辑。
+    未注册的 Provider 跳过；register_provider / list_tools 失败
+    降级为 warning 并继续（行为与原 _phase_init 步骤 4 一致）。
+    """
+    available_tools: List[ToolDefinition] = []
+    tool_router = ToolRouter()
+
+    for interface in (SystemToolProvider, MCPAdapter):
+        try:
+            provider = container.resolve(interface)
+        except ComponentNotRegisteredError:
+            logger.warning(
+                f"Component '{interface.__name__}' not registered, skipping"
+            )
+            continue
+        if provider:
+            try:
+                tool_router.register_provider(provider)
+                logger.debug(
+                    f"{interface.__name__} registered: {type(provider).__name__}"
+                )
+            except Exception as e:
+                logger.warning(f"{interface.__name__} registration failed: {e}")
+
+    try:
+        available_tools = tool_router.list_tools()
+        logger.debug(f"Available tools: {len(available_tools)}")
+    except Exception as e:
+        logger.warning(f"ToolRouter.list_tools() failed: {e}")
+
+    return tool_router, available_tools
+
+
 # ---------------------------------------------------------------------------
 # AsyncLifecycleOrchestrator
 # ---------------------------------------------------------------------------
@@ -248,37 +284,8 @@ class AsyncLifecycleOrchestrator:
                 logger.warning(f"MemoryBackend.search() failed: {e}")
 
         # 4. ToolRouter（框架内部，非 DI）— 合并 SystemToolProvider + MCPAdapter
-        available_tools: List[ToolDefinition] = []
-        tool_router = ToolRouter()
-
-        # 4a. SystemToolProvider（可选）
-        sys_provider = self._resolve_optional(SystemToolProvider)
-        if sys_provider:
-            try:
-                tool_router.register_provider(sys_provider)
-                logger.debug(
-                    f"SystemToolProvider registered: {type(sys_provider).__name__}"
-                )
-            except Exception as e:
-                logger.warning(f"SystemToolProvider registration failed: {e}")
-
-        # 4b. MCPAdapter（可选 — 不注册即裁切）
-        mcp_adapter = self._resolve_optional(MCPAdapter)
-        if mcp_adapter:
-            try:
-                tool_router.register_provider(mcp_adapter)
-                logger.debug(
-                    f"MCPAdapter registered: {type(mcp_adapter).__name__}"
-                )
-            except Exception as e:
-                logger.warning(f"MCPAdapter registration failed: {e}")
-
-        try:
-            available_tools = tool_router.list_tools()
-            logger.debug(f"Available tools: {len(available_tools)}")
-        except Exception as e:
-            logger.warning(f"ToolRouter.list_tools() failed: {e}")
-
+        #    与 Kernel boot 探针共用 build_tool_router（行为不变，仅提取）
+        tool_router, available_tools = build_tool_router(self.container)
         self._cached_tool_router = tool_router
         self._cached_tools = available_tools
 
