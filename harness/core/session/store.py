@@ -229,9 +229,19 @@ class SessionStore:
         保持"唯一咽喉点"语义不随配置分叉）。
         boot 路径须在 restore_sequencer 之后再调用
         （Sequencer 按引用捕获，restore 会替换对象）。
+
+        Raises:
+            ValueError: 同一 pid 重复注册。重复注册会替换 _logs[pid]
+                并在首次 flush 时启动第二个 writer 写同一文件
+                （重复 header/seq 分叉，日志不可恢复），故显式拒绝。
         """
         from .session_log import SessionLog
 
+        if pid in self._logs:
+            raise ValueError(
+                f"create_log: pid '{pid}' already registered — "
+                f"每个 pid 只允许一份 SessionLog"
+            )
         log = SessionLog(
             conv_id=self._conv_id or "ephemeral",
             pid=pid,

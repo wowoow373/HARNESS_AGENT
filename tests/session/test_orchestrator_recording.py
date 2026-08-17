@@ -170,3 +170,14 @@ class TestRecording:
         await orch._phase_loop(ctx)
         assert len(orch._history) == 2
         assert list(tmp_path.iterdir()) == []
+
+    @run_async
+    async def test_no_llm_records_stop(self, tmp_path):
+        """no_llm 分支：call_llm=None 时 stop_reason='no_llm' 落盘。"""
+        store, log, orch = _make(tmp_path, [UserRequest(text="hi")], None)
+        ctx = await orch._phase_init()
+        await orch._phase_loop(ctx)
+        evts = _read_events(store, "root")
+        assert [e["type"] for e in evts] == ["header", "user", "stop"]
+        assert evts[-1]["stop_reason"] == "no_llm"
+        await store.close()

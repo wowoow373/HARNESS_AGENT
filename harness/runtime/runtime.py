@@ -37,13 +37,17 @@ class Runtime:
     Mode B: Runtime(console).run_from_script(path) — Batch 3 ✅。
     """
 
-    def __init__(self, console: 'SystemConsole'):
+    def __init__(self, console: 'SystemConsole', session_config=None):
         """初始化 Runtime。
 
         Args:
             console: SystemConsole 实现（如 CliConsole）。
+            session_config: SessionConfig（可选）。None 时使用默认配置
+                            （root=./sessions, enabled=True）。
         """
         self._console = console
+        self._session_config = session_config
+        self._store = None
         self._kernel = None
         self._sigint_count: int = 0
 
@@ -84,6 +88,28 @@ class Runtime:
     # 内部
     # ------------------------------------------------------------------
 
+    def _open_store(self):
+        """按配置创建 SessionStore 并开始会话（resume 路径在 T13 改为 boot 接管）。"""
+        from ..core.session.config import SessionConfig
+        from ..core.session.store import SessionStore
+
+        cfg = self._session_config or SessionConfig()
+        self._store = SessionStore(cfg.root, enabled=cfg.enabled)
+        self._store.begin_session(None)
+        return self._store
+
+    async def _close_store(self) -> None:
+        """drain + fsync + close；降级的一次性提示（失败方向向下的最后一环）。"""
+        if self._store is None:
+            return
+        try:
+            await self._store.close()
+        except Exception as e:
+            logger.error("SessionStore.close() failed: %s", e)
+        for pid in self._store.degraded:
+            print(f"[系统] 警告：agent '{pid}' 的会话日志写盘降级，"
+                  f"该 agent 日志可能不完整。")
+
     async def _run_async(self, harness) -> None:
         """异步主流程。"""
         from .kernel import Kernel, make_async_llm
@@ -94,8 +120,9 @@ class Runtime:
             call_llm = make_async_llm(call_llm)
             logger.info("Wrapped sync call_llm → async via asyncio.to_thread")
 
-        # 2. 创建 Kernel
-        self._kernel = Kernel(self._console)
+        # 2. 创建 Kernel（注入进程级 SessionStore）
+        store = self._open_store()
+        self._kernel = Kernel(self._console, store=store)
 
         # 3. spawn root agent
         self._kernel.spawn_root(harness, call_llm=call_llm)
@@ -132,6 +159,7 @@ class Runtime:
                 loop.remove_signal_handler(signal.SIGINT)
             except (NotImplementedError, RuntimeError):
                 pass
+            await self._close_store()
 
         # 8. 推送停止事件
         await self._console.send(RuntimeStopped())
@@ -140,8 +168,9 @@ class Runtime:
         """Mode B 异步主流程。"""
         from .kernel import Kernel
 
-        # 1. 创建 Kernel
-        self._kernel = Kernel(self._console)
+        # 1. 创建 Kernel（注入进程级 SessionStore）
+        store = self._open_store()
+        self._kernel = Kernel(self._console, store=store)
 
         # 2. 从脚本 spawn agent（无 parent）
         result = self._kernel.spawn_from_script(script_path, parent=None)
@@ -201,6 +230,8 @@ class Runtime:
                 loop.remove_signal_handler(signal.SIGINT)
             except (NotImplementedError, RuntimeError):
                 pass
+
+            await self._close_store()
 
         # 8. 收集最终输出
         agents_results = []

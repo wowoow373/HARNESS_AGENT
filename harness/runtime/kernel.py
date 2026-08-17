@@ -77,11 +77,12 @@ class Kernel:
     - 处理系统输入（stub in Batch 1, 完整实现 in Batch 4）
     """
 
-    def __init__(self, console):
+    def __init__(self, console, store=None):
         """初始化 Kernel。
 
         Args:
             console: SystemConsole 实例，用于推送系统事件。
+            store: SessionStore（可选）。None 时持久化关闭，行为与现状一致。
         """
         # 进程表
         self.runtime_table: dict[str, 'AgentRuntime'] = {}
@@ -107,6 +108,9 @@ class Kernel:
         # Batch 2 遗留：_pending_subscriptions 不再使用。
         # 订阅关系现在直接注册到 MessageBus（见 spawn_from_script）。
         self._pending_subscriptions: list[tuple[str, str]] = []
+
+        # 持久化：进程级 SessionStore（内核机制，非 DI）
+        self._store = store
 
     # ------------------------------------------------------------------
     # 公开方法
@@ -145,8 +149,9 @@ class Kernel:
         # 2a. Inject Runtime tools
         self._inject_runtime_tools(harness.container, pid=pid)
 
-        # 3. 初始化 orchestrator
-        runtime._init_orchestrator(call_llm=call_llm)
+        # 3. 初始化 orchestrator（先建 SessionLog——orchestrator 与之共享 history）
+        session_log = self._make_session_log(pid, harness, runtime, parent=None)
+        runtime._init_orchestrator(call_llm=call_llm, session_log=session_log)
 
         # 4. 注册到进程表
         self.runtime_table[pid] = runtime
@@ -371,8 +376,10 @@ class Kernel:
                 # 5f. Inject Runtime tools
                 self._inject_runtime_tools(harness.container, pid=name)
 
-                # 5g. Initialize orchestrator
-                runtime._init_orchestrator(call_llm=call_llm)
+                # 5g. Initialize orchestrator（SessionLog 先行，理由同 spawn_root）
+                session_log = self._make_session_log(name, harness, runtime, parent)
+                runtime._init_orchestrator(call_llm=call_llm,
+                                           session_log=session_log)
 
                 # 5h. Register with Kernel (replace if already exists)
                 if name in self.runtime_table:
@@ -511,6 +518,39 @@ class Kernel:
             f"injected {composite.tool_count} runtime tool(s)"
         )
 
+    def _make_session_log(self, pid: str, harness, runtime, parent):
+        """为 agent 创建 SessionLog（须在 _init_orchestrator 之前，以共享 history）。
+
+        store 为 None（持久化关闭）时仍创建纯内存 SessionLog——
+        "唯一咽喉点"语义不随配置分叉。
+        """
+        from ..core.session.session_log import SessionLog
+
+        if self._store is None:
+            return SessionLog(conv_id="ephemeral", pid=pid, store=None)
+        return self._store.create_log(
+            pid,
+            parent=parent.pid if parent else None,
+            manifest_provider=lambda: self._probe_manifest(harness, runtime),
+        )
+
+    def _probe_manifest(self, harness, runtime) -> dict:
+        """计算当前装配清单（T9 接入 compute_manifest；此前返回最小集）。"""
+        try:
+            from ..core.session.manifest import compute_manifest
+            tools = []
+            orch = getattr(runtime, "_orchestrator", None)
+            if orch is not None:
+                tools = orch._cached_tools
+            return compute_manifest(
+                harness.container, cached_tools=tools,
+                call_llm=getattr(harness, "call_llm", None),
+            )
+        except Exception as e:
+            logger.debug("_probe_manifest failed for '%s': %s",
+                         getattr(runtime, "pid", "?"), e)
+            return {}
+
     # ------------------------------------------------------------------
     # 内部方法（Batch 1 stub，后续 batch 升级）
     # ------------------------------------------------------------------
@@ -520,6 +560,7 @@ class Kernel:
 
         执行顺序：
         1. 推送 AgentFinished 到 SystemConsole
+        1.5. 持久化收尾（幂等）：session_end 兜底 + index 投影更新
         2. 默认订阅：通知父 agent（child_finished），含去重逻辑
         3. 级联终止：通过 MessageBus 查询订阅者，推送 __EXIT_SENTINEL__。
            父 agent 被显式排除（不受级联影响，顶层设计 Section 四.5）。
@@ -541,6 +582,19 @@ class Kernel:
             f"_on_agent_finished: pid='{runtime.pid}' "
             f"duration={duration:.1f}s error={runtime.error}"
         )
+
+        # ── 1.5 持久化收尾（幂等）：session_end 兜底 + index 投影更新 ──
+        if self._store is not None:
+            try:
+                await self._store.finalize_agent(
+                    runtime.pid,
+                    final_output=runtime.last_output,
+                    execution_time=duration,
+                    status="paused",
+                )
+            except Exception as e:
+                logger.warning(
+                    f"finalize_agent('{runtime.pid}') failed: {e}")
 
         # ── 2. 默认订阅：通知父 agent ──
         # 去重：如果父 agent 显式 subscribe 了本 agent，跳过 child_finished。
