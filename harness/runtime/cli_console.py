@@ -16,12 +16,15 @@ from .types import (
     AgentSpawned,
     AgentStateChanged,
     AgentsListed,
+    ApprovalRequested,
     CommandTalk,
     CommandKill,
     CommandListAgents,
     CommandEndWorkflow,
     CommandExit,
     CommandTalkDirect,
+    CommandApprove,
+    CommandDeny,
     CommandError,
     RuntimeStarted,
     RuntimeStopped,
@@ -156,6 +159,22 @@ class CliConsole:
                 )
             return CommandTalkDirect(pid=parts[1], text=parts[2])
 
+        # /approve <id>
+        if parts[0] == "/approve":
+            if len(parts) < 2:
+                return CommandError(
+                    command=text, error="用法: /approve <id>"
+                )
+            return CommandApprove(approval_id=parts[1])
+
+        # /deny <id>
+        if parts[0] == "/deny":
+            if len(parts) < 2:
+                return CommandError(
+                    command=text, error="用法: /deny <id>"
+                )
+            return CommandDeny(approval_id=parts[1])
+
         # 未知命令
         return CommandError(
             command=text, error=f"未知命令: '{parts[0]}'"
@@ -231,6 +250,13 @@ class CliConsole:
                         f"  {pid:12} {state:13} {mode:11} "
                         f"{rounds:7} {parent:12}{error_mark}"
                     )
+
+        elif isinstance(event, ApprovalRequested):
+            import json
+            print(f"[审批] {event.pid} 请求执行工具 {event.tool_name}")
+            print(f"  参数: {json.dumps(event.arguments, ensure_ascii=False)}")
+            print(f"  /approve {event.approval_id} 批准    "
+                  f"/deny {event.approval_id} 拒绝")
 
         elif isinstance(event, CommandError):
             print(f"[系统] 错误: {event.error}")
