@@ -71,8 +71,6 @@ class SlowQueryTool(BaseTool):
         )
 
     def execute(self, args) -> ToolResult:
-        print("    [工具] slow_query 被调用，开始执行（将卡住 10s，治理层 3s 超时）...",
-              flush=True)
         time.sleep(10)  # 一直未响应：既不返回也不抛异常
         return ToolResult(success=True, content="这段永远不会返回给 LLM")
 
@@ -95,7 +93,6 @@ class UnreliableDivideTool(BaseTool):
         )
 
     def execute(self, args) -> ToolResult:
-        print("    [工具] unreliable_divide 被调用，抛出异常...", flush=True)
         raise RuntimeError("工具内部错误：除数为零导致崩溃")
 
 
@@ -116,7 +113,6 @@ class SafeEchoTool(BaseTool):
         )
 
     def execute(self, args) -> ToolResult:
-        print("    [工具] safe_echo 执行成功", flush=True)
         return ToolResult(success=True, content=args["text"])
 
 
