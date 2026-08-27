@@ -304,7 +304,9 @@ class AsyncLifecycleOrchestrator:
             tool_router=tool_router,
             policy_registry=self._policy_registry or _default_reg,
             approval_broker=self._approval_broker,
-            pid=getattr(self._adapter, "pid", ""),
+            # KBA 用 _pid；其他 adapter 可能用 pid —— 兼容两者
+            pid=(getattr(self._adapter, "pid", None)
+                 or getattr(self._adapter, "_pid", "")),
         )
 
         # 5. 构建 AssemblyContext
