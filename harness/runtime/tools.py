@@ -60,12 +60,11 @@ class CompositeSystemToolProvider:
             return self._runtime_tools[name].execute(args)
 
         if self._user:
-            try:
+            # 只有"工具不存在"才 fall through；工具执行异常必须穿透，
+            # 交由上层治理层捕获——否则会把工具 bug 误报成 KeyError。
+            has_tool = getattr(self._user, "has_tool", None)
+            if has_tool is None or has_tool(name):
                 return self._user.execute(name, args)
-            except Exception:
-                # User provider doesn't have this tool, or raised
-                # for other reasons — fall through to unified KeyError.
-                pass
 
         raise KeyError(
             f"Tool '{name}' not found in CompositeSystemToolProvider"

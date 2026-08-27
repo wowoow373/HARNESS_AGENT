@@ -132,6 +132,36 @@ class TestInjectRuntimeTools:
         result = provider.execute("list_agents", {})
         assert result.success is True
 
+    def test_user_tool_exception_propagates(self):
+        """User tool 执行抛异常应穿透（不被吞成 KeyError）。"""
+        from harness.components.tool.base import BaseTool
+        from harness.interfaces.types import ToolDefinition
+        from harness.components.tool.default_system_tool_provider import (
+            DefaultSystemToolProvider,
+        )
+
+        class _BoomTool(BaseTool):
+            def get_definition(self):
+                return ToolDefinition(
+                    name="boom", description="b",
+                    parameters={"type": "object", "properties": {}, "required": []},
+                )
+            def execute(self, args):
+                raise RuntimeError("boom")
+
+        user_provider = DefaultSystemToolProvider(
+            tools=[_BoomTool()], use_builtins=False,
+        )
+        container = DIContainer()
+        container.register(SystemToolProvider, user_provider)
+
+        kernel = Kernel(_MockConsole())
+        kernel._inject_runtime_tools(container, pid="test")
+        provider = container.resolve(SystemToolProvider)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            provider.execute("boom", {})
+
 
 # ── spawn_from_script ──
 

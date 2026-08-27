@@ -472,12 +472,21 @@ class AsyncLifecycleOrchestrator:
                         after_ts = time.time()
                         duration_ms = (after_ts - before_ts) * 1000
 
+                        # 治理层把失败收敛为 ToolResult(success=False) 而非抛异常，
+                        # 推送 ToolResultEvent 前先从 result 提取真实的 success/error。
+                        if result is not None and hasattr(result, "success"):
+                            success = result.success
+                            if hasattr(result, "error") and result.error:
+                                error = result.error
+                        else:
+                            success = error is None
+
                         # 推送 ToolResultEvent
                         await self._adapter.send(ToolResultEvent(
                             call_id=tc.id,
                             tool_name=tc.function.name,
-                            success=(error is None),
-                            result=result if error is None else None,
+                            success=success,
+                            result=result if success else None,
                             error=error,
                             duration_ms=duration_ms,
                         ))
