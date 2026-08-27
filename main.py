@@ -52,19 +52,19 @@ def _cmd_init(args: argparse.Namespace) -> int:
     output_dir = args.output_dir
     force = args.force
 
-    # 查找模板目录
+    # 查找模板目录（profiles/ 已迁移至 agents/，见 b99b472）
     project_root = os.path.dirname(os.path.abspath(__file__))
-    template_dir = os.path.join(project_root, "profiles", profile)
+    template_dir = os.path.join(project_root, "agents", profile)
 
     if not os.path.isdir(template_dir):
         print(f"Error: Profile '{profile}' not found.")
         # 列出可用模板
-        profiles_root = os.path.join(project_root, "profiles")
+        profiles_root = os.path.join(project_root, "agents")
         if os.path.isdir(profiles_root):
             available = [
                 d for d in os.listdir(profiles_root)
                 if os.path.isdir(os.path.join(profiles_root, d))
-                and not d.startswith(".")
+                and not d.startswith((".", "_"))
             ]
             if available:
                 print(f"Available profiles: {', '.join(sorted(available))}")

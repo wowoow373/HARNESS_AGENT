@@ -1246,26 +1246,34 @@ class TestKernelBridgeAdapterReceive:
             assert result.metadata["from"] == "collector"
         asyncio.run(_test())
 
-    @pytest.mark.skip(
-        reason="与实现语义相悖的遗留测试：bridge_adapter.receive() 按设计跳过 "
-               "stop 标记的 InternalMessage（a2513ff），本测试期望其返回，"
-               "导致 await 永久挂起。待后续决定改实现还是删测试。")
-    def test_receive_internal_message_with_stop_metadata(self, setup):
-        """StopEvent 转换的 InternalMessage 保留 stop metadata。"""
+    def test_receive_stop_marked_message_is_skipped(self, setup):
+        """stop 标记的 InternalMessage 被跳过（不推给 LLM），receive() 取下一条。
+
+        设计依据（a2513ff）：订阅者上一轮已收到 TextEvent，StopEvent 转换的
+        空消息无需再送达，receive() 消费丢弃后继续等下一条。
+        """
         async def _test():
             kernel, _, kba = setup
-            msg = InternalMessage(
+            stop_msg = InternalMessage(
                 from_pid="collector",
                 content="",
                 metadata={"stop": True},
             )
-            await kernel.input_queues["test_agent"].put(msg)
+            next_msg = InternalMessage(
+                from_pid="collector",
+                content="采集到 28 个文件",
+            )
+            await kernel.input_queues["test_agent"].put(stop_msg)
+            await kernel.input_queues["test_agent"].put(next_msg)
 
             result = await kba.receive()
 
-            assert result.text == ""
-            assert result.metadata["stop"] is True
+            assert isinstance(result, UserRequest)
+            assert result.text == "采集到 28 个文件"
             assert result.metadata["from"] == "collector"
+            assert "stop" not in result.metadata
+            # stop 消息已被消费丢弃，队列无残留
+            assert kernel.input_queues["test_agent"].empty()
         asyncio.run(_test())
 
     def test_receive_exit_sentinel_converts_to_exit_request(self, setup):

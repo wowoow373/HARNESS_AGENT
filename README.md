@@ -4,7 +4,7 @@
 >
 > 核心理念：**框架只定义接口契约与编排流程，所有具体行为由你通过「实现接口 + 依赖注入」来自定义。**
 >
-> **v2.0** — 新增 Runtime 多 Agent 协作层 | 920 tests passing
+> **v2.0** — 新增 Runtime 多 Agent 协作层 | 1085 tests passing
 
 ---
 
@@ -141,7 +141,7 @@ Runtime(CliConsole()).run(harness)  # Mode A 启动
 ## 测试
 
 ```bash
-pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 920 tests
+pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 1085 tests
 ```
 
 ---
