@@ -19,13 +19,17 @@
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 
 # 将项目根目录加入 sys.path（使得脚本可以在任意位置被加载）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+# 将 demo 目录加入 sys.path（import 共享的 demo_tools）
+_DEMO_DIR = Path(__file__).resolve().parent
+if str(_DEMO_DIR) not in sys.path:
+    sys.path.insert(0, str(_DEMO_DIR))
 
 from harness.core.container import DIContainer
 from harness.di import Harness
@@ -37,8 +41,6 @@ from harness.interfaces import (
     Sensor,
     SystemToolProvider,
 )
-from harness.interfaces.types import ToolDefinition, ToolResult
-from harness.components.tool.base import BaseTool
 from harness.components.tool.default_system_tool_provider import (
     DefaultSystemToolProvider,
 )
@@ -47,85 +49,11 @@ from harness.components.memory_backend.md_memory import MdMemory
 from harness.components.sensor.logging_sensor import LoggingSensor
 from harness.runtime.decorators import agent
 
-# 工具治理策略
-from harness.core.governance.policy import policy_registry, ToolPolicy
+# 共享演示工具 + 治理策略
+from demo_tools import demo_tools, register_policies
 
-
-# ── 演示工具 ──────────────────────────────────────────────────────
-
-
-class SlowQueryTool(BaseTool):
-    """一直未响应的工具（sleep 10s，模拟慢服务卡死）。"""
-
-    def get_definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name="slow_query",
-            description="查询销售数据（连接数据库）",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "查询内容"},
-                },
-                "required": ["query"],
-            },
-        )
-
-    def execute(self, args) -> ToolResult:
-        time.sleep(10)  # 数据库连接卡住，一直未返回
-        return ToolResult(success=True, content="这段永远不会返回给 LLM")
-
-
-class UnreliableDivideTool(BaseTool):
-    """会抛异常的工具（模拟内部有 bug）。"""
-
-    def get_definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name="unreliable_divide",
-            description="计算两个数的比值",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "a": {"type": "number", "description": "被除数"},
-                    "b": {"type": "number", "description": "除数"},
-                },
-                "required": ["a", "b"],
-            },
-        )
-
-    def execute(self, args) -> ToolResult:
-        # b=0 时抛真实的 ZeroDivisionError
-        return ToolResult(success=True, content=args["a"] / args["b"])
-
-
-class SafeEchoTool(BaseTool):
-    """正常可靠的工具。"""
-
-    def get_definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name="safe_echo",
-            description="向用户发送一条消息",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要发送的消息内容"},
-                },
-                "required": ["text"],
-            },
-        )
-
-    def execute(self, args) -> ToolResult:
-        return ToolResult(success=True, content=args["text"])
-
-
-# ── 治理策略注册 ──────────────────────────────────────────────────
-
-# slow_query：3 秒超时（工具 sleep 10s，必然超时）
-policy_registry.register("slow_query", ToolPolicy(timeout=3))
-
-# unreliable_divide：异常会被兜底；给 5s 超时兜底（防御性）
-policy_registry.register("unreliable_divide", ToolPolicy(timeout=5))
-
-# safe_echo 用内置默认策略（timeout=60，不重试，不 gate）
+# 顶层调用：exec_module 时在 agent 启动前注册
+register_policies()
 
 
 def _assemble_agent(name: str) -> Harness:
@@ -143,10 +71,7 @@ def _assemble_agent(name: str) -> Harness:
     # 只暴露三个演示工具（use_builtins=False，避免 read_file/shell 干扰）
     container.register(
         SystemToolProvider,
-        DefaultSystemToolProvider(
-            tools=[SlowQueryTool(), UnreliableDivideTool(), SafeEchoTool()],
-            use_builtins=False,
-        ),
+        DefaultSystemToolProvider(tools=demo_tools(), use_builtins=False),
     )
 
     return Harness.from_container(container, call_llm=MinimalLLMAdapter())
