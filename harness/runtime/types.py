@@ -107,6 +107,18 @@ class CommandError:
     error: str = ""
 
 
+@dataclass
+class CommandApprove:
+    """/approve <id> — 批准一个工具审批请求。"""
+    approval_id: str
+
+
+@dataclass
+class CommandDeny:
+    """/deny <id> — 拒绝一个工具审批请求。"""
+    approval_id: str
+
+
 # ── SystemCommand union 更新 ──
 # 注意：CommandError 也在 union 中——CliConsole.receive() 解析失败时
 # 返回 CommandError 作为"命令"，Kernel 收到后透传给 console.send() 显示。
@@ -114,6 +126,7 @@ SystemCommand = (
     CommandTalk | CommandKill | CommandListAgents
     | CommandEndWorkflow | CommandExit | CommandTalkDirect
     | CommandError
+    | CommandApprove | CommandDeny
 )
 
 
@@ -221,6 +234,22 @@ class SystemMessage:
     message: str = ""
 
 
+@dataclass
+class ApprovalRequested:
+    """高风险工具触发了人工审批请求。
+
+    Attributes:
+        approval_id: 短审批 id，供 /approve <id> /deny <id> 使用。
+        pid: 发起工具调用的 agent pid。
+        tool_name: 待审批的工具名。
+        arguments: 工具调用参数（供前台展示）。
+    """
+    approval_id: str = ""
+    pid: str = ""
+    tool_name: str = ""
+    arguments: dict = field(default_factory=dict)
+
+
 # Union 类型别名，用于 SystemConsole.send() 签名
 SystemEvent = (
     AgentSpawned | AgentStateChanged | AgentFinished
@@ -229,4 +258,5 @@ SystemEvent = (
     | AgentsListed     # Batch 4
     | CommandError     # Batch 4
     | SystemMessage    # Batch 4
+    | ApprovalRequested
 )
