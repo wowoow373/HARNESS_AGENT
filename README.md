@@ -4,7 +4,7 @@
 >
 > 核心理念：**框架只定义接口契约与编排流程，所有具体行为由你通过「实现接口 + 依赖注入」来自定义。**
 >
-> **v2.0** — 新增 Runtime 多 Agent 协作层 | 1085 tests passing
+> **v2.0** — Runtime 多 Agent 协作层 + 会话持久化 + 工具治理层 | 1118 tests passing
 
 ---
 
@@ -41,6 +41,12 @@ python main.py run --runtime
 # Mode B: 直接启动 Workflow 脚本
 python main.py workflow examples/debate_workflow.py
 ```
+
+**5. 会话持久化与崩溃恢复。**
+对话自动落盘到 `./.harness/sessions/`，`--resume <conv_id>` 一键从断点恢复。崩溃恢复包含 LSN 空洞检测、日志尾部物理截断修复、manifest 工具集一致性校验、跨日志消息配对修复。见 [会话持久化运行指南](docs/session-persistence-retrospective.md)。
+
+**6. 工具治理层：超时、异常兜底、Gate 审批。**
+给工具调用统一套上超时与异常兜底——工具卡死或抛异常都不会阻塞 agent 主循环，收敛成错误结果喂回 LLM；高风险工具触发前台人工审批（`/approve` `/deny`）。见 [工具治理层验证](#工具治理层验证)。
 
 ---
 
@@ -141,7 +147,7 @@ Runtime(CliConsole()).run(harness)  # Mode A 启动
 ## 测试
 
 ```bash
-pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 1085 tests
+pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 1118 tests
 ```
 
 ---
@@ -193,7 +199,8 @@ python agents/tool-governance-demo/test_e2e.py
 - ✅ 系统命令：`/agents` `/kill` `/end` `/talk` `/exit`
 - ✅ Mode A（交互式）+ Mode B（Workflow 直接启动）
 - ✅ KBA DI 可注册：支持自定义 I/O 策略（batch window / immediate 等）
-- 会话持久化与崩溃恢复（`--resume`）——见 [ARCHITECTURE.md](ARCHITECTURE.md#会话持久化与恢复)
+- ✅ **会话持久化与崩溃恢复**（`--resume`）：会话落盘、断点恢复、LSN 空洞检测、manifest 校验、消息配对修复——见 [会话持久化运行指南](docs/session-persistence-retrospective.md)
+- ✅ **工具治理层**：超时 + 异常兜底 + 重试 + Gate 人工审批——见 [工具治理层验证](#工具治理层验证)
 
 **计划中**
 
