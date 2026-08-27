@@ -60,7 +60,7 @@ class SlowQueryTool(BaseTool):
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="slow_query",
-            description="查询远端数据（模拟慢服务，会长时间无响应）",
+            description="查询销售数据（连接数据库）",
             parameters={
                 "type": "object",
                 "properties": {
@@ -71,7 +71,7 @@ class SlowQueryTool(BaseTool):
         )
 
     def execute(self, args) -> ToolResult:
-        time.sleep(10)  # 一直未响应：既不返回也不抛异常
+        time.sleep(10)  # 数据库连接卡住，一直未返回
         return ToolResult(success=True, content="这段永远不会返回给 LLM")
 
 
@@ -81,7 +81,7 @@ class UnreliableDivideTool(BaseTool):
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="unreliable_divide",
-            description="执行除法运算（模拟内部有 bug、会抛异常的工具）",
+            description="计算两个数的比值",
             parameters={
                 "type": "object",
                 "properties": {
@@ -93,7 +93,8 @@ class UnreliableDivideTool(BaseTool):
         )
 
     def execute(self, args) -> ToolResult:
-        raise RuntimeError("工具内部错误：除数为零导致崩溃")
+        # b=0 时抛真实的 ZeroDivisionError
+        return ToolResult(success=True, content=args["a"] / args["b"])
 
 
 class SafeEchoTool(BaseTool):
@@ -102,11 +103,11 @@ class SafeEchoTool(BaseTool):
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="safe_echo",
-            description="安全地回显文本（可靠工具）",
+            description="向用户发送一条消息",
             parameters={
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "description": "要回显的文本"},
+                    "text": {"type": "string", "description": "要发送的消息内容"},
                 },
                 "required": ["text"],
             },
@@ -154,15 +155,11 @@ def _assemble_agent(name: str) -> Harness:
 @agent(
     "failure_demo",
     entry_prompt=(
-        "你是面试演示 agent「failure_demo」。本次任务是展示工具治理层如何兜底工具故障。\n\n"
-        "请严格按以下顺序依次调用工具，每个工具只调用一次，无论返回什么结果都继续下一步：\n"
-        "1. slow_query，参数 query=\"test\"\n"
-        "2. unreliable_divide，参数 a=1, b=0\n"
-        "3. safe_echo，参数 text=\"面试演示成功：超时和异常都被框架兜底，agent 恢复了\"\n\n"
-        "调用完三个工具后，用一两句话向用户报告你经历的三个工具调用的结果"
-        "（这是你的最终回复，不要再调用任何工具）。\n\n"
-        "注意：前两个工具会失败（第一个超时、第二个抛异常），这是预期的，请务必继续，"
-        "不要因为失败而停下。"
+        "你是数据分析助手。请完成以下任务：\n"
+        "1. 用 slow_query 工具查询销售数据（参数 query=\"sales\"）\n"
+        "2. 用 unreliable_divide 工具计算转化率（参数 a=100, b=0）\n"
+        "3. 用 safe_echo 工具把最终结论发送给用户（参数 text 写你的结论）\n\n"
+        "如果某个步骤失败，继续尝试后续步骤即可。全部完成后，告诉我整个过程发生了什么。"
     ),
     metadata={"role": "failure_demo", "task": "演示超时/异常兜底"},
 )

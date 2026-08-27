@@ -26,12 +26,10 @@ from harness.runtime.types import AgentOutput
 
 
 class _DemoConsole:
-    """透传框架事件流：打印 AgentOutput，过滤冗长的 ThinkingEvent。"""
+    """透传框架事件流：打印所有 AgentOutput（含 LLM 思考）。"""
 
     async def send(self, event):
         if isinstance(event, AgentOutput):
-            if event.content.startswith("[ThinkingEvent]"):
-                return  # 思考过程冗长，与演示主题无关
             print(f"[{event.pid}] {event.content}")
 
     async def receive(self):
