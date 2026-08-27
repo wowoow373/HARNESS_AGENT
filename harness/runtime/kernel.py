@@ -113,6 +113,14 @@ class Kernel:
         # 持久化：进程级 SessionStore（内核机制，非 DI）
         self._store = store
 
+        # 工具治理层基础设施（进程级）：
+        # - policy_registry：进程级策略单例（代码注册式）
+        # - approval_broker：审批 pending 管理 + 事件推送 + 裁决
+        from ..core.governance.policy import policy_registry
+        from .approval import ApprovalBroker
+        self.policy_registry = policy_registry
+        self.approval_broker = ApprovalBroker(console=console)
+
     # ------------------------------------------------------------------
     # 公开方法
     # ------------------------------------------------------------------
@@ -1073,7 +1081,8 @@ class Kernel:
         from .types import (
             CommandTalk, CommandKill, CommandListAgents,
             CommandEndWorkflow, CommandExit, CommandTalkDirect,
-            CommandError, AgentsListed, AgentStateChanged,
+            CommandApprove, CommandDeny, CommandError,
+            AgentsListed, AgentStateChanged, SystemMessage,
             __EXIT_SENTINEL__,
         )
         from ..interfaces.types import UserRequest
@@ -1176,6 +1185,21 @@ class Kernel:
                             metadata={"from": "user", "type": "talk"},
                         ),
                     )
+
+            # ── CommandApprove / CommandDeny: 工具审批裁决 ──
+            elif isinstance(command, (CommandApprove, CommandDeny)):
+                approved = isinstance(command, CommandApprove)
+                if self.approval_broker.resolve(command.approval_id, approved):
+                    verdict = "批准" if approved else "拒绝"
+                    await self._console.send(SystemMessage(
+                        message=f"审批 {command.approval_id} 已{verdict}"
+                    ))
+                else:
+                    await self._console.send(CommandError(
+                        command=f"/{'approve' if approved else 'deny'} "
+                                f"{command.approval_id}",
+                        error="无此审批请求或已裁决",
+                    ))
 
             # ── CommandError (由 CliConsole 解析失败产生) ──
             elif isinstance(command, CommandError):

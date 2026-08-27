@@ -1,9 +1,23 @@
 """审批相关 SystemCommand / SystemEvent 类型冒烟测试。"""
 
+import asyncio
+
 from harness.runtime.cli_console import CliConsole
+from harness.runtime.kernel import Kernel
 from harness.runtime.types import (
     ApprovalRequested, CommandApprove, CommandDeny, CommandError,
 )
+
+
+class _ConsoleSpy:
+    def __init__(self):
+        self.events = []
+
+    async def send(self, event):
+        self.events.append(event)
+
+    async def receive(self):
+        return None  # 不会被调用到
 
 
 def test_approval_requested_fields():
@@ -40,3 +54,22 @@ def test_parse_approve_missing_id():
 def test_parse_deny_missing_id():
     cmd = CliConsole()._parse_command("/deny")
     assert isinstance(cmd, CommandError)
+
+
+def test_kernel_has_broker_and_registry():
+    k = Kernel(_ConsoleSpy())
+    assert k.approval_broker is not None
+    assert k.policy_registry is not None
+    assert k.approval_broker.pending_count == 0
+
+
+def test_kernel_approval_bridge():
+    async def _t():
+        k = Kernel(_ConsoleSpy())
+        aid, fut = k.approval_broker.request("root", "t", {})
+        assert k.approval_broker.resolve(aid, True) is True
+        assert await fut is True
+        return k
+
+    k = asyncio.run(_t())
+    assert k.approval_broker.pending_count == 0
