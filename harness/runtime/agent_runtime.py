@@ -131,6 +131,8 @@ class AgentRuntime:
             adapter=self.adapter,
             call_llm=call_llm,
             session_log=session_log,
+            policy_registry=self._kernel.policy_registry,
+            approval_broker=self._kernel.approval_broker,
         )
 
     # ------------------------------------------------------------------

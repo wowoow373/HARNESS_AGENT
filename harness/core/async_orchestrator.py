@@ -163,6 +163,9 @@ class AsyncLifecycleOrchestrator:
         call_llm: Optional[AsyncCallLLM] = None,
         # session_log 为 None 时行为与插桩前完全一致（无持久化路径）
         session_log=None,
+        # 工具治理层（可选注入；None 时用模块级单例 registry + None broker）
+        policy_registry=None,
+        approval_broker=None,
     ):
         """初始化异步编排器。
 
@@ -202,6 +205,11 @@ class AsyncLifecycleOrchestrator:
         if session_log is not None:
             self._history = session_log.history
             self._tool_call_records = session_log.tool_call_records
+
+        # 工具治理层：_phase_init 里包裹 tool_router 后设置
+        self._governance = None
+        self._policy_registry = policy_registry
+        self._approval_broker = approval_broker
 
     # ------------------------------------------------------------------
     # Hook 注册
@@ -288,6 +296,16 @@ class AsyncLifecycleOrchestrator:
         tool_router, available_tools = build_tool_router(self.container)
         self._cached_tool_router = tool_router
         self._cached_tools = available_tools
+
+        # 4a. 治理层包裹 tool_router（Gate + 超时 + 重试）
+        from ..core.governance.policy import policy_registry as _default_reg
+        from ..core.governance.layer import ToolGovernanceLayer
+        self._governance = ToolGovernanceLayer(
+            tool_router=tool_router,
+            policy_registry=self._policy_registry or _default_reg,
+            approval_broker=self._approval_broker,
+            pid=getattr(self._adapter, "pid", ""),
+        )
 
         # 5. 构建 AssemblyContext
         ctx = AssemblyContext(
@@ -437,8 +455,9 @@ class AsyncLifecycleOrchestrator:
                             EVENT_BEFORE_TOOL_EXECUTE, tc, self._system_state
                         )
                         try:
-                            if tool_router and tool_router.has_tool(tc.function.name):
-                                result = tool_router.execute(
+                            if (self._governance is not None
+                                    and self._governance.has_tool(tc.function.name)):
+                                result = await self._governance.execute(
                                     tc.function.name, args
                                 )
                             else:
