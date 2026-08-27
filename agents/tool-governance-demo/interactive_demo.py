@@ -63,6 +63,21 @@ class _DataAssistantGuide:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="工具治理层交互式演示（Mode A，真实 LLM）",
+    )
+    parser.add_argument(
+        "--resume", metavar="CONV_ID", default=None,
+        help="恢复指定会话（如 conv-20260827-214950-7f8d）",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="配合 --resume 强制接管所有权 / 降级 manifest 校验",
+    )
+    args = parser.parse_args()
+
     # 注册治理策略（进程级单例）
     register_policies()
 
@@ -85,7 +100,7 @@ def main() -> None:
     harness = Harness.from_container(container, call_llm=MinimalLLMAdapter())
 
     console = CliConsole(mode="mode_a")
-    Runtime(console).run(harness)
+    Runtime(console).run(harness, resume=args.resume, force=args.force)
 
 
 if __name__ == "__main__":
