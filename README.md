@@ -146,6 +146,44 @@ pytest tests/ --ignore=tests/test_real_llm_trace.py -v    # 1085 tests
 
 ---
 
+## 工具治理层验证
+
+工具治理层（`harness/core/governance/`）内置超时、异常兜底、Gate 人工审批。
+以下命令需先配置 `harness/config/.env`（真实 LLM）。
+
+**单元测试**（不依赖 LLM）：
+
+```bash
+python -m pytest tests/governance/ tests/runtime/test_approval.py tests/runtime/test_approval_commands.py -v
+```
+
+**故障兜底演示**（超时 + 异常，真实 LLM）：
+
+```bash
+# 单 agent workflow：slow_query 超时 → unreliable_divide 抛异常 → agent 换工具继续
+python agents/tool-governance-demo/demo_failures.py
+
+# 交互式对话（Mode A）：用户输入，agent 调工具、失败兜底、继续对话
+python agents/tool-governance-demo/interactive_demo.py
+
+# 恢复上次交互会话（--resume 接 .harness/sessions/ 下的 conv_id）
+python agents/tool-governance-demo/interactive_demo.py --resume <conv_id>
+```
+
+**Gate 审批演示**（高危工具人工审批，真实 LLM）：
+
+```bash
+# 交互式：shell 高危工具触发前台 /approve /deny
+python main.py workflow agents/tool-governance-demo/workflow.py
+
+# 自动审批：无需人工输入，跑完整链路
+python agents/tool-governance-demo/test_e2e.py
+```
+
+详见 [agents/tool-governance-demo/README.md](agents/tool-governance-demo/README.md)。
+
+---
+
 ## 路线图
 
 **已完成（v2.0）** 🎉
