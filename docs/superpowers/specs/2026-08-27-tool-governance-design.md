@@ -71,11 +71,11 @@ CliConsole.send(ApprovalRequested 事件) ──> 前台展示
 
 ### 组件清单
 
-新增 3 个文件：
+新增 4 个文件：
 
 | 文件 | 职责 |
 |---|---|
-| `harness/core/governance/__init__.py` | 包导出 |
+| `harness/core/governance/__init__.py` | 包导出（ToolPolicy / RetryPolicy / PolicyRegistry / ToolGovernanceLayer / ApprovalBroker） |
 | `harness/core/governance/policy.py` | `ToolPolicy` / `RetryPolicy` dataclass + `PolicyRegistry`（精确名、fnmatch 通配、默认策略三级匹配） |
 | `harness/core/governance/layer.py` | `ToolGovernanceLayer`：`async execute(name, args) -> ToolResult`，编排 gate → retry → timeout 顺序 |
 | `harness/core/governance/approval.py` | `ApprovalBroker`：挂 Kernel，管理 pending 审批（`asyncio.Future` 表），`request()` 发事件并等裁决（带超时），`resolve()` 由 Kernel 命令循环回调 |
@@ -182,8 +182,9 @@ kernel.policy_registry.set_default(ToolPolicy(timeout=60))
 
 **registry 挂 Kernel 而非 DI 容器**：策略是进程级运维决策（不是 agent 装配
 决策）；Kernel 是进程级单例，且 console 命令循环也在 Kernel——后续加
-`/policy` 查看命令时路径最短。编排器经 kernel 引用获取
-（`_init_orchestrator` 已能拿到 kernel 上下文）。
+`/policy` 查看命令时路径最短。接线路径：AgentRuntime 持有 `self._kernel`，
+`_init_orchestrator` 时从 kernel 取 `policy_registry` / `approval_broker`
+传入编排器构造参数。
 
 ## 五、故障语义矩阵
 
